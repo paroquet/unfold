@@ -84,4 +84,56 @@ describe('validatePlan', () => {
     const issues = validatePlan(drifted, ctx([c0, c1], previous))
     expect(issues.map((i) => i.code)).toContain('cross-round-drift')
   })
+
+  it('无 hunk 的文件漏掉会报 file-missing', () => {
+    // 模拟二进制文件或纯 mode 变更（无 hunk）
+    const binary = { path: 'lib.a', kind: 'modify' as const, binary: true, mode: '100644', blob: 'b'.repeat(40), oldMode: '100644', oldBlob: 'a'.repeat(40), hunks: [] as any }
+    const c = ctx([binary])
+    const p = plan([{ key: 'k1', index: 1, title: 't', intro: 'i', hunkIds: [], filePaths: [] }])
+    expect(validatePlan(p, c).map((i) => i.code)).toContain('file-missing')
+  })
+
+  it('同一文件分到两章会报 file-duplicated', () => {
+    const c = ctx([change('a.ts', 0)])
+    const p = plan([
+      { key: 'k1', index: 1, title: 't', intro: 'i', hunkIds: [], filePaths: ['a.ts'] },
+      { key: 'k2', index: 2, title: 't', intro: 'i', hunkIds: [], filePaths: ['a.ts'] },
+    ])
+    expect(validatePlan(p, c).map((i) => i.code)).toContain('file-duplicated')
+  })
+
+  it('引用不存在的文件会报 file-unknown', () => {
+    const c = ctx([change('a.ts', 0)])
+    const p = plan([{ key: 'k1', index: 1, title: 't', intro: 'i', hunkIds: [], filePaths: ['a.ts', 'ghost.ts'] }])
+    expect(validatePlan(p, c).map((i) => i.code)).toContain('file-unknown')
+  })
+
+  it('ctx.previous 为 undefined 时不报 cross-round-drift', () => {
+    const c = ctx([change('a.ts', 1)])
+    const p = plan([{ key: 'k1', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] }])
+    expect(validatePlan(p, c).map((i) => i.code)).not.toContain('cross-round-drift')
+  })
+
+  it('上一轮有、本轮消失的文件不报漂移', () => {
+    // 上一轮 a.ts 在 contract 章
+    const previous = plan([
+      { key: 'contract', index: 1, title: 't', intro: 'i', hunkIds: [], filePaths: ['a.ts'] },
+    ])
+    // 本轮 a.ts 完全消失（不在 changes 中）
+    const changes = [change('b.ts', 1)]
+    const p = plan([{ key: 'core', index: 1, title: 't', intro: 'i', hunkIds: ['b.ts#0'], filePaths: ['b.ts'] }])
+    expect(validatePlan(p, ctx(changes, previous)).map((i) => i.code)).not.toContain('cross-round-drift')
+  })
+
+  it('本轮新增、上一轮没有的文件不报漂移', () => {
+    // 上一轮只有 a.ts
+    const previous = plan([
+      { key: 'core', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+    ])
+    // 本轮 a.ts 保留，b.ts 新增
+    const c0 = change('a.ts', 1)
+    const c1 = change('b.ts', 1)
+    const p = plan([{ key: 'core', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0', 'b.ts#0'], filePaths: ['a.ts', 'b.ts'] }])
+    expect(validatePlan(p, ctx([c0, c1], previous)).map((i) => i.code)).not.toContain('cross-round-drift')
+  })
 })
