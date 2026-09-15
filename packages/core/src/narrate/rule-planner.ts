@@ -45,17 +45,6 @@ export class RulePlanner implements ChapterPlanner {
   readonly id = 'rule'
 
   async plan(ctx: PlanContext): Promise<Plan> {
-    // 跨轮稳定：记录「文件 → 上一轮所在章的 key」。用 key 而非 index，
-    // 因为 index 由本轮哪些桶非空决定，同一概念章节的 index 在轮次间可能不同
-    // （例如某轮没有 contract 改动，core 就会从 index 2 变成 index 1）。
-    // 有 hunk 的文件其路径必在 filePaths 里，无需再从 hunkIds 重复填一遍。
-    const previousChapterKeyOf = new Map<string, string>()
-    if (ctx.previous !== undefined) {
-      for (const ch of ctx.previous.chapters) {
-        for (const p of ch.filePaths) previousChapterKeyOf.set(p, ch.key)
-      }
-    }
-
     const buckets = new Map<PathClass, FileChange[]>(ORDER.map((c) => [c, []]))
     for (const change of ctx.changes) {
       buckets.get(classifyPath(change.path))!.push(change)
@@ -90,10 +79,7 @@ export class RulePlanner implements ChapterPlanner {
     }
 
     // 跨轮稳定：按 key 把上一轮已分配过的文件放回同一概念章节（spec §7.3）。
-    // 若上一轮的 key 在本轮不存在，文件保持规则本身给出的位置，不凭空造章。
-    if (previousChapterKeyOf.size > 0) {
-      applyPreviousAssignment(chapters, ctx, previousChapterKeyOf)
-    }
+    pinToPreviousChapters(chapters, ctx.changes, ctx.previous)
 
     return {
       version: 1,
@@ -105,13 +91,35 @@ export class RulePlanner implements ChapterPlanner {
   }
 }
 
-function applyPreviousAssignment(
+/**
+ * 跨轮稳定的核心收敛逻辑：把已经在 `previous` 里分配过的文件，钉回它在
+ * `previous` 里所在的章（按 `key` 匹配，而非 `index`——`index` 由本轮哪些桶
+ * 非空决定，同一概念章节的 index 在轮次间可能变化，不能当锚点）。
+ *
+ * 若 `previous` 里某文件的 key 在本轮 `chapters` 中不存在，则不强行搬动，
+ * 文件保持规则（或调用方）本身给出的位置，不凭空造一个章出来。
+ *
+ * 导出是因为这段逻辑不是 RulePlanner 专属：v2 的 AI planner 在跨轮场景下
+ * （包括 spec §9.2 AI 不可用回落到 RulePlanner 的混合场景——此时 previous
+ * 的 key 可能来自 AI 排的章、与规则的自然归属并不一致）同样要收敛到同一批
+ * 「已标注过的文件不漂移」的语义，应当复用这一个实现，而不是各自重写一遍。
+ */
+export function pinToPreviousChapters(
   chapters: Chapter[],
-  ctx: PlanContext,
-  previousChapterKeyOf: Map<string, string>,
+  changes: FileChange[],
+  previous: Plan | undefined,
 ): void {
+  if (previous === undefined) return
+
+  // 有 hunk 的文件其路径必在 filePaths 里，无需再从 hunkIds 重复填一遍。
+  const previousChapterKeyOf = new Map<string, string>()
+  for (const ch of previous.chapters) {
+    for (const p of ch.filePaths) previousChapterKeyOf.set(p, ch.key)
+  }
+  if (previousChapterKeyOf.size === 0) return
+
   const byKey = new Map(chapters.map((c) => [c.key, c]))
-  for (const change of ctx.changes) {
+  for (const change of changes) {
     const wantKey = previousChapterKeyOf.get(change.path)
     if (wantKey === undefined) continue
     const target = byKey.get(wantKey)

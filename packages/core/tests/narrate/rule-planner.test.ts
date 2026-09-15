@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { createTempRepo } from '../helpers/repo.js'
 import { computeChanges } from '../../src/narrate/diff.js'
-import { RulePlanner, classifyPath } from '../../src/narrate/rule-planner.js'
-import type { PlanContext } from '../../src/narrate/plan.js'
+import type { FileChange } from '../../src/narrate/diff.js'
+import { RulePlanner, classifyPath, pinToPreviousChapters } from '../../src/narrate/rule-planner.js'
+import type { Plan, PlanContext } from '../../src/narrate/plan.js'
 
 async function ctxFor(files: Record<string, string>): Promise<PlanContext> {
   const repo = await createTempRepo()
@@ -79,23 +80,110 @@ describe('RulePlanner', () => {
     await repo.cleanup()
   })
 
-  it('跨轮稳定：文件按 key（概念章节）保持归属，即便本轮分桶让 index 变化', async () => {
-    // 第一轮：types.ts（contract）+ engine.ts（core）两个桶都非空
-    const first = await ctxFor({ 'src/types.ts': 'a\n', 'src/engine.ts': 'b\n' })
-    const firstPlan = await new RulePlanner().plan(first)
-    const engineChapterFirst = firstPlan.chapters.find((c) =>
-      c.filePaths.includes('src/engine.ts'),
-    )!
-    expect(engineChapterFirst.key).toBe('core')
+  it('跨轮稳定：previous 的归属与本轮自然分类冲突时，钉回 previous 的章而非自然归属', async () => {
+    // src/engine.ts 的自然归属（classifyPath）是 core。构造一个「上一轮由 AI
+    // planner 排章」的 previous（spec §9.2：AI 不可用时回落到 RulePlanner，
+    // 此时 previous 的 key 来自 AI、可能与规则的自然归属不一致——这正是跨轮
+    // 稳定机制唯一有用武之地的场景）：AI 把 engine.ts 放进了 contract 章。
+    const ctx = await ctxFor({ 'src/types.ts': 'a\n', 'src/engine.ts': 'b\n' })
+    const previous: Plan = {
+      version: 1,
+      base: ctx.base,
+      snapshot: ctx.snapshot,
+      plannerId: 'ai-stub',
+      chapters: [
+        {
+          index: 1,
+          key: 'contract',
+          title: '契约与核心（AI 排的章）',
+          intro: 'AI 把这两个文件放进了同一章。',
+          hunkIds: ctx.changes.flatMap((c) => c.hunks.map((h) => h.id)),
+          filePaths: ['src/types.ts', 'src/engine.ts'],
+        },
+      ],
+    }
 
-    // 第二轮：只剩 engine.ts 一个改动，本轮自然分桶只有一个「核心」章，
-    // 若拿上一轮的 index 当锚点会把它错误地拽进别的章（或不存在的兜底章）。
-    const second = await ctxFor({ 'src/engine.ts': 'b2\n' })
-    const secondPlan = await new RulePlanner().plan({ ...second, previous: firstPlan })
-    const engineChapterSecond = secondPlan.chapters.find((c) =>
-      c.filePaths.includes('src/engine.ts'),
-    )!
-    expect(engineChapterSecond.key).toBe('core')
-    expect(engineChapterSecond.title).toContain('核心')
+    const plan = await new RulePlanner().plan({ ...ctx, previous })
+
+    const contractChapter = plan.chapters.find((c) => c.key === 'contract')!
+    const coreChapter = plan.chapters.find((c) => c.key === 'core')
+    expect(contractChapter.filePaths).toContain('src/engine.ts')
+    expect(coreChapter?.filePaths.includes('src/engine.ts')).not.toBe(true)
+
+    // 钉回去之后，engine.ts 不能同时出现在两个章的 filePaths 里，也不能丢失
+    const owners = plan.chapters.filter((c) => c.filePaths.includes('src/engine.ts'))
+    expect(owners.length).toBe(1)
+  })
+})
+
+describe('pinToPreviousChapters（可独立单测的跨轮收敛函数）', () => {
+  function fakeChange(path: string): FileChange {
+    return {
+      path,
+      kind: 'modify',
+      binary: false,
+      mode: '100644',
+      blob: 'deadbeef',
+      oldMode: '100644',
+      oldBlob: 'beadfeed',
+      hunks: [{ id: `${path}#0`, oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [' x'] }],
+    }
+  }
+
+  it('把文件从当前章搬到 previous 记录的 key 所在章，不重复、不丢失', () => {
+    const chapters = [
+      { index: 1, key: 'core', title: '核心', intro: 'x', hunkIds: ['src/engine.ts#0'], filePaths: ['src/engine.ts'] },
+      { index: 2, key: 'contract', title: '契约', intro: 'x', hunkIds: [], filePaths: [] },
+    ]
+    const previous: Plan = {
+      version: 1,
+      base: 'b',
+      snapshot: 's',
+      plannerId: 'ai-stub',
+      chapters: [
+        {
+          index: 1,
+          key: 'contract',
+          title: '契约（AI 排的章）',
+          intro: 'x',
+          hunkIds: ['src/engine.ts#0'],
+          filePaths: ['src/engine.ts'],
+        },
+      ],
+    }
+
+    pinToPreviousChapters(chapters, [fakeChange('src/engine.ts')], previous)
+
+    const core = chapters.find((c) => c.key === 'core')!
+    const contract = chapters.find((c) => c.key === 'contract')!
+    expect(contract.filePaths).toEqual(['src/engine.ts'])
+    expect(contract.hunkIds).toEqual(['src/engine.ts#0'])
+    expect(core.filePaths).toEqual([])
+    expect(core.hunkIds).toEqual([])
+
+    const owners = chapters.filter((c) => c.filePaths.includes('src/engine.ts'))
+    expect(owners.length).toBe(1)
+  })
+
+  it('previous 为 undefined 或其 key 在本轮不存在时，什么都不做', () => {
+    const chapters = [
+      { index: 1, key: 'core', title: '核心', intro: 'x', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+    ]
+    pinToPreviousChapters(chapters, [fakeChange('a.ts')], undefined)
+    expect(chapters[0]!.filePaths).toEqual(['a.ts'])
+
+    const previousWithUnknownKey: Plan = {
+      version: 1,
+      base: 'b',
+      snapshot: 's',
+      plannerId: 'ai-stub',
+      chapters: [
+        { index: 1, key: 'wiring', title: '接线', intro: 'x', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+      ],
+    }
+    pinToPreviousChapters(chapters, [fakeChange('a.ts')], previousWithUnknownKey)
+    // 本轮没有 key 为 wiring 的章，不能凭空造一个出来，文件原地不动
+    expect(chapters[0]!.filePaths).toEqual(['a.ts'])
+    expect(chapters.length).toBe(1)
   })
 })
