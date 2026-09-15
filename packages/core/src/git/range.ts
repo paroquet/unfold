@@ -14,11 +14,25 @@ export interface ResolveBaseOptions {
   defaultBranch?: string
 }
 
+/**
+ * 尝试执行 git 命令，区分良性错误（ref 不存在、无共同祖先）和真错误。
+ * 良性错误：exit 非 0 且 stderr 为空 → 返回 null
+ * 真错误：stderr 非空 → 抛出
+ * 成功：返回 stdout
+ */
 async function tryGit(repo: string, args: string[]): Promise<string | null> {
   try {
     return await git(repo, args)
   } catch (err) {
-    if (err instanceof GitError) return null
+    if (err instanceof GitError) {
+      // 如果 stderr 非空，说明是真错误（如对象库损坏、权限问题）
+      if (err.stderr !== '') {
+        throw err
+      }
+      // stderr 为空的错误是良性的（如 ref 不存在、无共同祖先）
+      return null
+    }
+    // spawn 错误（如 git 二进制不存在）也要抛出
     throw err
   }
 }
@@ -40,15 +54,23 @@ export async function resolveBase(
     return { base, source: 'explicit' }
   }
 
-  const upstream = await tryGit(repo, ['rev-parse', '--abbrev-ref', '@{upstream}'])
-  if (upstream !== null) {
-    const mb = await tryGit(repo, ['merge-base', upstream, 'HEAD'])
+  // 尝试 upstream：先探测 upstream 是否配置（避免调用 merge-base 时 @{upstream} 不存在的 stderr）
+  const currentBranch = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  const upstreamBranch = await tryGit(repo, ['config', `branch.${currentBranch}.merge`])
+  if (upstreamBranch !== null) {
+    // upstream 已配置，调用 merge-base
+    const mb = await tryGit(repo, ['merge-base', '@{upstream}', 'HEAD'])
     if (mb !== null && mb !== head) return { base: mb, source: 'upstream' }
   }
 
+  // 尝试默认分支：先探测 ref 是否可解析
   const defaultBranch = opts.defaultBranch ?? 'main'
-  const mb = await tryGit(repo, ['merge-base', defaultBranch, 'HEAD'])
-  if (mb !== null && mb !== head) return { base: mb, source: 'default-branch' }
+  const defaultExists = await tryGit(repo, ['rev-parse', '--verify', '--quiet', defaultBranch])
+  if (defaultExists !== null) {
+    // 默认分支存在，调用 merge-base
+    const mb = await tryGit(repo, ['merge-base', defaultBranch, 'HEAD'])
+    if (mb !== null && mb !== head) return { base: mb, source: 'default-branch' }
+  }
 
   return { base: head, source: 'head' }
 }

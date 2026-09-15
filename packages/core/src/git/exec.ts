@@ -4,13 +4,31 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 
 export class GitError extends Error {
+  readonly code: number | null
+  readonly spawnErrno: string | null
+  readonly stderr: string
+  readonly args: string[]
+
   constructor(
-    readonly code: number,
-    readonly stderr: string,
-    readonly args: string[],
+    codeOrErrno: number | string | null,
+    stderr: string,
+    args: string[],
   ) {
-    super(`git ${args.join(' ')} 退出码 ${code}: ${stderr.trim()}`)
+    let message: string
+    if (typeof codeOrErrno === 'string') {
+      // spawn 错误（如 'ENOENT'）
+      message = `git ${args.join(' ')} spawn failed: ${codeOrErrno}`
+    } else {
+      // git 退出码
+      const code = codeOrErrno ?? -1
+      message = `git ${args.join(' ')} 退出码 ${code}: ${stderr.trim()}`
+    }
+    super(message)
     this.name = 'GitError'
+    this.code = typeof codeOrErrno === 'string' ? null : (codeOrErrno ?? -1)
+    this.spawnErrno = typeof codeOrErrno === 'string' ? codeOrErrno : null
+    this.stderr = stderr
+    this.args = args
   }
 }
 
@@ -39,7 +57,8 @@ export async function git(cwd: string, args: string[], opts: GitOptions = {}): P
     const { stdout } = await child
     return opts.trim === false ? stdout : stdout.replace(/\n$/, '')
   } catch (err: unknown) {
-    const e = err as { code?: number; stderr?: string }
-    throw new GitError(e.code ?? -1, e.stderr ?? String(err), args)
+    const e = err as { code?: number | string; stderr?: string }
+    const codeOrErrno = e.code ?? null
+    throw new GitError(codeOrErrno, e.stderr ?? String(err), args)
   }
 }
