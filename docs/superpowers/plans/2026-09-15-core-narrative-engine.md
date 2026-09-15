@@ -2251,7 +2251,7 @@ describe('toCodeTours', () => {
     const p: Plan = { ...plan, chapters: [{ key: 'core', index: 1, title: '第 2 层：核心逻辑', intro: 'x', hunkIds: [], filePaths: ['img.bin'] }] }
     const tours = toCodeTours(p, [binary], 'unfold/rev-1')
     expect(tours[0]!.steps).toEqual([
-      { file: 'img.bin', line: 1, description: '其余 — img.bin' },
+      { file: 'img.bin', line: 1, description: '第 2 层：核心逻辑 — img.bin' },
     ])
   })
 })
