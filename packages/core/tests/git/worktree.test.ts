@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtemp, readdir, stat, utimes } from 'node:fs/promises'
+import { mkdtemp, readdir, rm as fsRm, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createTempRepo } from '../helpers/repo.js'
@@ -58,7 +58,8 @@ describe('worktree', () => {
     const head = await repo.commit('base')
     const tree = await repo.git('rev-parse', `${head}^{tree}`)
 
-    const wtDir = join(await mkdtemp(join(tmpdir(), 'unfold-wt-')), 'work')
+    const wtParent = await mkdtemp(join(tmpdir(), 'unfold-wt-'))
+    const wtDir = join(wtParent, 'work')
     await addWorktree(repo.dir, wtDir, head)
 
     // 打哨兵：把刚 checkout 出来的文件 mtime 全部拨回远古时间戳。
@@ -83,6 +84,7 @@ describe('worktree', () => {
     expect(stdout).toBe('')
 
     await removeWorktree(repo.dir, wtDir)
+    await fsRm(wtParent, { recursive: true, force: true })
     await repo.cleanup()
   })
 })
