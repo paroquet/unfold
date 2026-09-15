@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { narrate } from '../narrate/run.js'
+import { parseArgs } from './args.js'
 
 function usage(): never {
   process.stderr.write(
@@ -14,21 +15,10 @@ function usage(): never {
 }
 
 async function main(argv: string[]): Promise<void> {
-  const [command, ...rest] = argv
-  if (command !== 'narrate') usage()
+  const parsed = parseArgs(argv, process.cwd())
+  if (!parsed.ok) usage()
 
-  let repo = process.cwd()
-  let explicit: string | undefined
-  let defaultBranch: string | undefined
-
-  for (let i = 0; i < rest.length; i += 1) {
-    const flag = rest[i]
-    const value = rest[i + 1]
-    if (flag === '--base' && value !== undefined) { explicit = value; i += 1 }
-    else if (flag === '--default-branch' && value !== undefined) { defaultBranch = value; i += 1 }
-    else if (flag === '--repo' && value !== undefined) { repo = value; i += 1 }
-    else usage()
-  }
+  const { repo, explicit, defaultBranch } = parsed.args
 
   const result = await narrate(repo, {
     ...(explicit !== undefined ? { explicit } : {}),
