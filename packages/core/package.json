@@ -9,6 +9,6 @@
   "bin": { "unfold": "./dist/bin/unfold.js" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   }
 }
