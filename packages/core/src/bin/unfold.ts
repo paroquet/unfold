@@ -25,6 +25,13 @@ async function main(argv: string[]): Promise<void> {
     ...(defaultBranch !== undefined ? { defaultBranch } : {}),
   })
 
+  if (!result.hasChanges) {
+    process.stdout.write(
+      `没有可讲的改动：${result.branch} 相对 base（${result.base.slice(0, 12)}）没有任何改动。\n`,
+    )
+    return
+  }
+
   process.stdout.write(
     [
       `叙事分支   ${result.branch}（${result.chapters} 章）`,

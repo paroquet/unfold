@@ -39,6 +39,7 @@ describe('narrate 端到端', () => {
     const headBefore = await repo.git('rev-parse', 'HEAD')
 
     const result = await narrate(repo.dir, { defaultBranch: 'main' })
+    if (!result.hasChanges) throw new Error('测试构造了真实改动，不应该走到 hasChanges: false 分支')
 
     // 字节一致
     expect(await repo.git('rev-parse', `${result.tip}^{tree}`)).toBe(
@@ -100,6 +101,31 @@ describe('narrate 端到端', () => {
     )
 
     await rm(result.reviewRoot, { recursive: true, force: true })
+    await repo.cleanup()
+  })
+
+  it('干净工作区上跑：不抛错，返回 hasChanges: false，不留下任何 review 状态（D3 回归）', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/types.ts', 'export type T = 1\n')
+    await repo.commit('base')
+    await repo.git('checkout', '-q', '-b', 'feature')
+    // 不做任何改动——工作区相对 base 干干净净
+
+    const result = await narrate(repo.dir, { defaultBranch: 'main' })
+
+    expect(result.hasChanges).toBe(false)
+    if (result.hasChanges) throw new Error('unreachable')
+    expect(result.branch).toBe('feature')
+
+    // 不该留下任何 review 状态目录（没有 reviewRoot 字段可用来清理，
+    // 直接确认 XDG_STATE_HOME 下这个仓库对应的 repo-id 目录压根没被建出来）
+    const { repoId } = await import('../../src/state/paths.js')
+    const { homedir } = await import('node:os')
+    const base = process.env['XDG_STATE_HOME'] ?? join(homedir(), '.local', 'state')
+    const repoStateDir = join(base, 'unfold', await repoId(repo.dir))
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(repoStateDir)).toBe(false)
+
     await repo.cleanup()
   })
 })

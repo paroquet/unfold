@@ -18,7 +18,9 @@ export interface NarrateOptions {
   now?: Date
 }
 
-export interface NarrateResult {
+/** 正常情况：工作区相对 base 有改动，产出了叙事分支与全部产物。 */
+export interface NarrateChanges {
+  hasChanges: true
   reviewId: string
   reviewRoot: string
   branch: string
@@ -28,6 +30,19 @@ export interface NarrateResult {
   chapters: number
   worktree: string
 }
+
+/**
+ * 干净工作区：相对 base 没有任何改动，无事可叙。这不是错误——narrate()
+ * 不抛错，调用方（CLI）据此打印一条提示而不是当成失败处理。没有创建
+ * review 状态目录 / 叙事分支 / worktree，避免留下一个「0 章」的空产物。
+ */
+export interface NarrateNoChanges {
+  hasChanges: false
+  branch: string
+  base: string
+}
+
+export type NarrateResult = NarrateChanges | NarrateNoChanges
 
 async function currentBranch(repo: string): Promise<string> {
   try {
@@ -42,6 +57,11 @@ async function currentBranch(repo: string): Promise<string> {
  * v1 闭环的第 2–3 步（spec §3）。本 plan 里两条轨道还是顺序执行——
  * 轨道 A 的 prepare 属于 VS Code 包，Plan 4 才接上，那时把 A1/A2 挪到
  * Promise 里与轨道 B 并发即可，这里的顺序已按并行拆好。
+ *
+ * 判断「有没有改动可叙」必须先拿到 snapshot 与 base，所以 changes 的计算
+ * 提前到了 reviewRoot / worktree / pinSnapshot 之前：只有确认真有改动，
+ * 才落地 review 状态目录、钉快照 ref、开 worktree——干净工作区上跑不会
+ * 留下一个「0 章」的空产物。
  */
 export async function narrate(
   repo: string,
@@ -49,23 +69,30 @@ export async function narrate(
 ): Promise<NarrateResult> {
   const branch = await currentBranch(repo)
   const reviewId = newReviewId(branch, opts.now)
+
+  const snap = await snapshot(repo)
+
+  const baseResolution = await resolveBase(repo, {
+    ...(opts.explicit !== undefined ? { explicit: opts.explicit } : {}),
+    ...(opts.defaultBranch !== undefined ? { defaultBranch: opts.defaultBranch } : {}),
+  })
+  const changes = await computeChanges(repo, baseResolution.base, snap.commit)
+
+  if (changes.length === 0) {
+    return { hasChanges: false, branch, base: baseResolution.base }
+  }
+
   const root = await reviewRoot(repo, reviewId)
   await mkdir(join(root, 'tours'), { recursive: true })
 
-  // 2. 快照 + 钉 ref
-  const snap = await snapshot(repo)
+  // 快照钉 ref，扛得过 gc（spec §4.3）
   await pinSnapshot(repo, reviewId, 1, snap.commit)
 
   // 轨道 A：worktree 直接停在终态
   const worktree = join(root, 'worktree')
   await addWorktree(repo, worktree, snap.commit)
 
-  // 轨道 B：base → 规划 → 重提交 → 校验
-  const baseResolution = await resolveBase(repo, {
-    ...(opts.explicit !== undefined ? { explicit: opts.explicit } : {}),
-    ...(opts.defaultBranch !== undefined ? { defaultBranch: opts.defaultBranch } : {}),
-  })
-  const changes = await computeChanges(repo, baseResolution.base, snap.commit)
+  // 轨道 B：规划 → 重提交 → 校验
   const ctx = { base: baseResolution.base, snapshot: snap.commit, changes }
   const plan = await new RulePlanner().plan(ctx)
 
@@ -110,6 +137,7 @@ export async function narrate(
   }
 
   return {
+    hasChanges: true,
     reviewId,
     reviewRoot: root,
     branch: narrativeBranch,
