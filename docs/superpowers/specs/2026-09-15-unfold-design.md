@@ -74,31 +74,50 @@ packages/vscode/          依赖 core，发 Marketplace
 
 ## 3. v1 闭环的数据流
 
+快照一出来，**重活与 AI 两条轨道并行跑**——`prepare` 是全链最贵的一步（Kotlin 那边是一次 Gradle import，分钟级），而它只依赖终态内容，与 base 推导、章节规划无关，没有理由等 AI。
+
 ```
 1. 触发       agent 报完工（或你手动开）
-2. 快照       snapshot()  → SNAP（commit 对象，含 untracked）
-3. base 推导  [AI+约束] git 规则给候选集 → AI 挑一个并给理由 → TS 校验
-              （第 2 轮起不问 AI：base = 上一轮的 snapshot）
-4. 规划       [AI+约束] ChapterPlanner(base, SNAP)
-              → plan.json（hunk → chapter + 章标题 + 每章导语）
-5. 重提交     [纯 TS]   replay() → commit_1..commit_N 于叙事 worktree
-6. 校验       [纯 TS]   verify(): tree(commit_N) == tree(SNAP)，不等即中止
-7. 导航就绪   LanguageNavigator.prepare(右侧 worktree)
-8. 阅读/批注  按章读，标 finding（AI 产的与人标的进同一列表），reviewed@blob-hash
-9. 投递       deliver(session, 一行指针)
-10. 等待      轮询 discover(cwd)，busy → idle
-11. 下一轮    回到 2，只展示增量
+2. 快照       snapshot() → SNAP（commit 对象，含 untracked）
+              git update-ref refs/unfold/<review-id>/round-<n> SNAP   ← 必须，见 §4.3
+   │
+   ├─ 轨道 A（重活，立刻开始，不等 AI）
+   │   A1. git worktree add --detach <path> SNAP   内容即终态
+   │   A2. LanguageNavigator.prepare(<path>)       node_modules symlink / Gradle import / LSP 索引
+   │
+   └─ 轨道 B（AI + 纯 TS，秒级）
+       B1. base 推导  [AI+约束] git 规则给候选集 → AI 挑一个并给理由 → TS 校验
+                      （第 2 轮起不问 AI：base = 上一轮的 snapshot）
+       B2. 规划       [AI+约束] ChapterPlanner(base, SNAP)
+                      → plan.json（hunk → chapter + 章标题 + 每章导语）
+       B3. 重提交     [纯 TS]   replay() → commit_1..commit_N
+       B4. 校验       [纯 TS]   verify(): tree(commit_N) == tree(SNAP)，不等即中止
+
+3. 汇合       git -C <path> checkout -B unfold/<review-id> commit_N
+              ⇒ 零文件改动，轨道 A 的索引不失效（实测，见 §11.7）
+4. 阅读/批注  不等 prepare 完成即可开始：readiness() 为 indexing 时先用 tree-sitter 导航，
+              就绪后自动升级为 LS。按章读，标 finding（AI 产的与人标的进同一列表），
+              reviewed@blob-hash
+5. 投递       deliver(session, 一行指针)
+6. 等待       轮询 discover(cwd)，busy → idle
+7. 下一轮     回到 2，只展示增量
 ```
+
+**汇合为什么是免费的**：`tree(commit_N) == tree(SNAP)` 是 §6.3 的不变量，所以 checkout 时 git 比对两棵树发现无差异，**一个文件都不写**。实测 mtime 与 inode 全部未变、worktree 干净——轨道 A 花几分钟建好的 LSP 索引不会被汇合冲掉。这是字节一致不变量的**第二个红利**（第一个是 §6.3 的批注可移植）。
+
+**verify 失败时**：轨道 A 的 worktree 仍停在 `SNAP`（detached），本身就是一份有效的「整体改动」视图。降级为无章节的普通 review，而不是整轮失败。
 
 哪一步交给 AI、输出怎么约束、失败怎么降级，见 §7。
 
 ## 4. 脏工作区快照
 
+### 4.1 约束
+
 `Claude Code` 默认不主动 commit，所以 v1 输入的常态是脏工作区。约束：**绝不干扰那个还活着的 agent**（不动工作区、不动 index、不动分支历史），且**绝不碰 stash 栈**（用户的 orca 多 worktree 共享 stash 栈）。
 
 **否决方案**：`git stash create`。实测（git 2.34.1）它**抓不到 untracked 文件**，且 `-u` 被接受但静默失效——而新文件恰恰是 agent 最常产的东西。
 
-**采用方案**（已实测）：
+### 4.2 采用方案（已实测）
 
 ```bash
 IDX="$(git rev-parse --git-dir)/unfold-snapshot-index"   # 必须在 worktree 外
@@ -110,6 +129,18 @@ rm -f "$IDX"
 性质：抓 tracked 改动 + untracked 新文件、尊重 `.gitignore`、工作区 / index / stash 栈零触碰。
 
 **必踩的坑**：临时 index 若放在 worktree 内，会被自己的 `git add -A` 抓进 tree（实测踩到：`.unfold-tmp-index` 和 `.unfold-tmp-index.lock` 出现在快照里）。放 `$(git rev-parse --git-dir)/` 下。
+
+### 4.3 快照必须显式钉 ref
+
+`SNAP` **不是** `commit_N` 的祖先（叙事分支的祖先链是 `base → commit_1 → … → commit_N`），所以一旦 worktree 从 `SNAP` 切到叙事分支，`SNAP` 就不在任何 ref 的可达范围内，`git gc --prune=now` 会把它清掉。
+
+而 §8.4 的增量重看依赖 `diff(snapshot_{n-1}, snapshot_n)`——**每一轮的快照都必须活到 review 结束**。
+
+```bash
+git update-ref "refs/unfold/<review-id>/round-<n>" "$SNAP"
+```
+
+实测：加 ref 后可达，且扛过 `git reflog expire --expire=now --all && git gc --prune=now`。review 结束清理时连同 `refs/unfold/<review-id>/` 一起删。
 
 ## 5. 代码导航（注册制）
 
@@ -168,7 +199,7 @@ Kotlin 的 tags 查询要自己写，wasm 要自己编。排期时按「Kotlin �
 
 ### 5.5 v1 取舍
 
-`prepare` **只对右侧（当前章状态）做**，左侧一律走 tree-sitter 降级。理由：索引两棵树对 TS 是翻倍、对 Kotlin/Gradle 是两次 import，而审代码时绝大多数跳转发生在当前状态侧。左右都上 LS 留给 v2。
+`prepare` **只对右侧（当前章状态）做**，左侧一律走 tree-sitter 降级。且 `prepare` 与 AI 轨道**并行**执行（§3），阅读不必等它完成——`readiness()` 为 `indexing` 时先用 tree-sitter 导航，就绪后自动升级。理由：索引两棵树对 TS 是翻倍、对 Kotlin/Gradle 是两次 import，而审代码时绝大多数跳转发生在当前状态侧。左右都上 LS 留给 v2。
 
 ## 6. 叙事分支：生成与校验
 
@@ -497,6 +528,8 @@ git 内置扩展对外 API 有 `toGitUri(uri, ref)`（`extensions/git/dist/main.
 - `git stash create` 只抓 tracked 改动；`-u` 被接受但**静默失效**（生成的 commit 只有 2 个 parent、无 `^3`，tree 里没有 untracked 文件）
 - 临时 index 配方（§4）实测通过：抓到 untracked、排除 gitignored、worktree/index/stash 栈零触碰
 - 临时 index 放 worktree 内会被自己 `add -A` 抓进 tree（实测踩到）
+- **汇合零改动**：worktree 先 `worktree add --detach <SNAP>`，待 `replay` 产出 `commit_N`（tree 与 SNAP 一致）后 `checkout -B <branch> commit_N`，实测**全部文件 mtime 与 inode 未变**、`git status` 干净。这是 §3 双轨并行成立的前提
+- **快照可达性**：`SNAP` 不是 `commit_N` 的祖先，汇合后即不可达（`git rev-list --all` 查不到），`git gc --prune=now` 会清除。`git update-ref refs/unfold/<review-id>/round-<n> <SNAP>` 后实测扛过 `reflog expire --expire=now --all` + `gc --prune=now`
 
 ### 11.8 npm 上的现成件
 
