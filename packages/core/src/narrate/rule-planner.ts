@@ -1,0 +1,123 @@
+import type { FileChange } from './diff.js'
+import type { Chapter, ChapterPlanner, Plan, PlanContext } from './plan.js'
+
+export type PathClass = 'contract' | 'core' | 'wiring' | 'test-doc'
+
+const ORDER: PathClass[] = ['contract', 'core', 'wiring', 'test-doc']
+
+const TITLES: Record<PathClass, string> = {
+  contract: '第 1 层：契约',
+  core: '第 2 层：核心逻辑',
+  wiring: '第 3 层：接线与调用方',
+  'test-doc': '第 4 层：测试与文档',
+}
+
+const INTROS: Record<PathClass, string> = {
+  contract: '先看类型、schema 与接口——它们定义了后面所有代码要满足的形状。',
+  core: '再看核心逻辑：真正实现行为的地方，前面的契约在这里被兑现。',
+  wiring: '然后看接线：谁调用了上面这些东西，改动如何被接进系统。',
+  'test-doc': '最后看测试与文档：它们说明作者认为哪些行为值得保证。',
+}
+
+/** 按路径把文件归到叙事的四层（spec §6.4 的默认顺序） */
+export function classifyPath(path: string): PathClass {
+  const lower = path.toLowerCase()
+  if (/(^|\/)(tests?|__tests__|spec)\//.test(lower) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(lower)) {
+    return 'test-doc'
+  }
+  if (/\.(md|mdx|txt|rst|adoc)$/.test(lower)) return 'test-doc'
+  if (/(^|\/)(types?|schema|schemas|proto|api|contracts?)(\/|\.)/.test(lower)) return 'contract'
+  if (/\.(d\.ts|proto|graphql|avsc)$/.test(lower)) return 'contract'
+  if (/(^|\/)(index|main|app|bootstrap|cli|bin)\.[cm]?[jt]sx?$/.test(lower)) return 'wiring'
+  if (/\.(json|ya?ml|toml|ini|cfg)$/.test(lower)) return 'wiring'
+  return 'core'
+}
+
+function emptyChapter(index: number, cls: PathClass): Chapter {
+  return { index, title: TITLES[cls], intro: INTROS[cls], hunkIds: [], filePaths: [] }
+}
+
+/**
+ * v1 的确定性 planner（spec §9.2 的兜底，也是 AI 不可用时的保底路径）。
+ * 只产「整文件同章」的分配——文件内分章是 v2（spec §6.5）。
+ */
+export class RulePlanner implements ChapterPlanner {
+  readonly id = 'rule'
+
+  async plan(ctx: PlanContext): Promise<Plan> {
+    const previousChapterOf = new Map<string, number>()
+    if (ctx.previous !== undefined) {
+      for (const ch of ctx.previous.chapters) {
+        for (const p of ch.filePaths) previousChapterOf.set(p, ch.index)
+        for (const id of ch.hunkIds) {
+          previousChapterOf.set(id.slice(0, id.lastIndexOf('#')), ch.index)
+        }
+      }
+    }
+
+    const buckets = new Map<PathClass, FileChange[]>(ORDER.map((c) => [c, []]))
+    for (const change of ctx.changes) {
+      buckets.get(classifyPath(change.path))!.push(change)
+    }
+
+    const chapters: Chapter[] = []
+    for (const cls of ORDER) {
+      const files = buckets.get(cls)!
+      if (files.length === 0) continue
+      const ch = emptyChapter(chapters.length + 1, cls)
+      for (const f of files) {
+        ch.filePaths.push(f.path)
+        for (const h of f.hunks) ch.hunkIds.push(h.id)
+      }
+      chapters.push(ch)
+    }
+
+    // 「其余」章：兜住一切没被上面覆盖的文件，保证 verify 恒真（spec §6.3）
+    const covered = new Set(chapters.flatMap((c) => c.filePaths))
+    const rest = ctx.changes.filter((c) => !covered.has(c.path))
+    const restChapter: Chapter = {
+      index: chapters.length + 1,
+      title: '其余',
+      intro: '前面各章未覆盖的改动，一并在此落地，确保终态与原分支逐字节一致。',
+      hunkIds: rest.flatMap((c) => c.hunks.map((h) => h.id)),
+      filePaths: rest.map((c) => c.path),
+    }
+    chapters.push(restChapter)
+
+    // 跨轮稳定：已分配过的文件回到原章号（spec §7.3）
+    if (previousChapterOf.size > 0) {
+      applyPreviousAssignment(chapters, ctx, previousChapterOf)
+    }
+
+    return {
+      version: 1,
+      base: ctx.base,
+      snapshot: ctx.snapshot,
+      plannerId: this.id,
+      chapters,
+    }
+  }
+}
+
+function applyPreviousAssignment(
+  chapters: Chapter[],
+  ctx: PlanContext,
+  previousChapterOf: Map<string, number>,
+): void {
+  const byIndex = new Map(chapters.map((c) => [c.index, c]))
+  for (const change of ctx.changes) {
+    const want = previousChapterOf.get(change.path)
+    if (want === undefined) continue
+    const target = byIndex.get(want)
+    if (target === undefined) continue
+    for (const ch of chapters) {
+      if (ch.index === want) continue
+      ch.filePaths = ch.filePaths.filter((p) => p !== change.path)
+      ch.hunkIds = ch.hunkIds.filter((id) => !id.startsWith(`${change.path}#`))
+    }
+    if (!target.filePaths.includes(change.path)) target.filePaths.push(change.path)
+    for (const h of change.hunks) {
+      if (!target.hunkIds.includes(h.id)) target.hunkIds.push(h.id)
+    }
+  }
+}
