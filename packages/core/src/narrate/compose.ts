@@ -20,7 +20,11 @@ export function composeContent(baseContent: string, hunks: Hunk[]): string {
 
   const out: string[] = []
   let cursor = 0 // 已消费到 base 的第几行（0-based）
-  let endsWithoutNewline = false
+  // 结尾换行状态由「实际消费到 base 最后一行」的那个 hunk 权威给出；
+  // null 表示还没有任何 hunk 触及过 base 的末尾，此时沿用 base 自己的状态。
+  // 这是个三态覆盖式判定，不是单向降级——触及末尾的 hunk 两个方向都能定：
+  // 可以把「有换行」改判成「无」，也可以把「无换行」改判成「有」。
+  let newEol: boolean | null = null
 
   for (const hunk of ordered) {
     const start = hunk.oldStart === 0 ? 0 : hunk.oldStart - 1
@@ -28,13 +32,16 @@ export function composeContent(baseContent: string, hunks: Hunk[]): string {
     cursor = start
 
     let prevMarker = ''
+    // 本 hunk 的新侧是否带有「无结尾换行」标记；只有当本 hunk 确实触及
+    // base 末尾时才会被采纳为最终判定，避免中间 hunk 的标记误伤结论。
+    let newSideNoNewline = false
     for (const raw of hunk.lines) {
       const marker = raw[0]
       const text = raw.slice(1)
       // `\ No newline` 描述的是它上一行所属的那一侧。只有跟在 '+' 或 ' '
       // 后面时才说明「新内容」没有结尾换行；跟在 '-' 后面说的是旧内容。
       if (raw.startsWith('\\ No newline at end of file')) {
-        if (prevMarker === '+' || prevMarker === ' ') endsWithoutNewline = true
+        if (prevMarker === '+' || prevMarker === ' ') newSideNoNewline = true
         continue
       }
       prevMarker = marker ?? ''
@@ -47,12 +54,15 @@ export function composeContent(baseContent: string, hunks: Hunk[]): string {
         out.push(text)
       }
     }
+
+    // 本 hunk 消费到了 base 的最后一行——由它权威决定结尾换行状态。
+    if (cursor === lines.length) newEol = !newSideNoNewline
   }
 
   for (let i = cursor; i < lines.length; i += 1) out.push(lines[i]!)
 
   if (out.length === 0) return ''
   const joined = out.join('\n')
-  const keepNewline = endsWithoutNewline ? false : trailingNewline
+  const keepNewline = newEol === null ? trailingNewline : newEol
   return keepNewline ? `${joined}\n` : joined
 }

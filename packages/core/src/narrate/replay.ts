@@ -90,6 +90,21 @@ export async function replay(
       parent = commit
     }
 
+    // 防御性断言：replay 依赖上游 validatePlan 已保证「每个文件的 hunk 都被
+    // 某一章收齐」。若调用方跳过了校验，这里静默产出的 tree 会是错的，而
+    // 错误要等到下游 verify 才暴露、错误信息也指不到这里的真正病灶。就地
+    // 报出来，让失败信息直接指向没被收齐的文件。
+    for (const change of changes) {
+      const appliedCount = applied.get(change.path)?.length ?? 0
+      if (appliedCount !== change.hunks.length) {
+        throw new Error(
+          `replay 内部不一致：文件 ${change.path} 只有 ${appliedCount}/${change.hunks.length} `
+            + '个 hunk 被分配到章节中——plan 未能让该文件在某一章达到终态，'
+            + '请先用 validatePlan 校验 plan',
+        )
+      }
+    }
+
     return { commits, tip: parent }
   } finally {
     await rm(indexPath, { force: true })
