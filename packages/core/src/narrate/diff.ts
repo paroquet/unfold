@@ -28,6 +28,21 @@ export interface FileChange {
   hunks: Hunk[]
 }
 
+/**
+ * 从 hunk id（形如 `src/a.ts#0`）中取出所属文件路径。
+ *
+ * 必须用 `lastIndexOf('#')` 而非 `startsWith(\`${path}#\`)` 之类的前缀匹配——
+ * 路径本身可以含 `#`（例如文件真的叫 `a#0.ts`），前缀匹配会把 `a#0.ts` 的
+ * hunk 误判成属于文件 `a`，导致钉住 `a` 时把 `a#0.ts` 的 hunk 一并过滤掉。
+ * `lastIndexOf('#')` 找不到分隔符时说明 id 格式本身就不对，直接抛错而不是
+ * 静默产出一个错误的路径。
+ */
+export function hunkPath(id: string): string {
+  const idx = id.lastIndexOf('#')
+  if (idx < 0) throw new Error(`非法 hunk id（缺少 '#' 分隔符): ${JSON.stringify(id)}`)
+  return id.slice(0, idx)
+}
+
 const NULL_SHA = '0000000000000000000000000000000000000000'
 
 interface RawEntry {

@@ -1,3 +1,4 @@
+import { hunkPath } from '../narrate/diff.js'
 import type { FileChange } from '../narrate/diff.js'
 import type { Plan } from '../narrate/plan.js'
 
@@ -29,7 +30,7 @@ export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): Cod
     const seen = new Set<string>()
 
     for (const id of chapter.hunkIds) {
-      const path = id.slice(0, id.lastIndexOf('#'))
+      const path = hunkPath(id)
       const change = byPath.get(path)
       if (change === undefined) continue
       const hunk = change.hunks.find((h) => h.id === id)

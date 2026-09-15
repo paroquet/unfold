@@ -186,4 +186,53 @@ describe('pinToPreviousChapters（可独立单测的跨轮收敛函数）', () =
     expect(chapters[0]!.filePaths).toEqual(['a.ts'])
     expect(chapters.length).toBe(1)
   })
+
+  it('文件名本身含 # 时，钉住同名前缀文件不会误删它的 hunk（C3 回归）', () => {
+    // 仓库里同时有文件 `a` 和 `a#0.ts`。钉 `a` 时，如果用
+    // `id.startsWith('a#')` 判断 hunk 归属，会把 `a#0.ts` 的 hunk id
+    // （形如 `a#0.ts#0`）也误判成属于 `a`，导致 `a#0.ts#0` 被从所有章里
+    // 过滤掉、变成无主 hunk。
+    const chapters = [
+      {
+        index: 1, key: 'core', title: '核心', intro: 'x',
+        hunkIds: ['a#0'], filePaths: ['a'],
+      },
+      {
+        index: 2, key: 'contract', title: '契约', intro: 'x',
+        hunkIds: ['a#0.ts#0'], filePaths: ['a#0.ts'],
+      },
+      {
+        index: 3, key: 'wiring', title: '接线', intro: 'x',
+        hunkIds: [], filePaths: [],
+      },
+    ]
+    const previous: Plan = {
+      version: 1,
+      base: 'b',
+      snapshot: 's',
+      plannerId: 'ai-stub',
+      chapters: [
+        {
+          index: 1, key: 'wiring', title: '接线（AI 排的章）', intro: 'x',
+          hunkIds: ['a#0'], filePaths: ['a'],
+        },
+      ],
+    }
+
+    pinToPreviousChapters(
+      chapters,
+      [fakeChange('a'), fakeChange('a#0.ts')],
+      previous,
+    )
+
+    // a 被钉去了 wiring 章
+    const wiring = chapters.find((c) => c.key === 'wiring')!
+    expect(wiring.filePaths).toEqual(['a'])
+    expect(wiring.hunkIds).toEqual(['a#0'])
+
+    // a#0.ts 的 hunk 必须原封不动留在 contract 章，不能被误删
+    const contract = chapters.find((c) => c.key === 'contract')!
+    expect(contract.filePaths).toEqual(['a#0.ts'])
+    expect(contract.hunkIds).toEqual(['a#0.ts#0'])
+  })
 })

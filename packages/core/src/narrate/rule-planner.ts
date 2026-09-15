@@ -1,3 +1,4 @@
+import { hunkPath } from './diff.js'
 import type { FileChange } from './diff.js'
 import type { Chapter, ChapterPlanner, Plan, PlanContext } from './plan.js'
 
@@ -127,7 +128,7 @@ export function pinToPreviousChapters(
     for (const ch of chapters) {
       if (ch.key === wantKey) continue
       ch.filePaths = ch.filePaths.filter((p) => p !== change.path)
-      ch.hunkIds = ch.hunkIds.filter((id) => !id.startsWith(`${change.path}#`))
+      ch.hunkIds = ch.hunkIds.filter((id) => hunkPath(id) !== change.path)
     }
     if (!target.filePaths.includes(change.path)) target.filePaths.push(change.path)
     for (const h of change.hunks) {

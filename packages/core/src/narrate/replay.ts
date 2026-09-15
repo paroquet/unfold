@@ -2,6 +2,7 @@ import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { git } from '../git/exec.js'
 import { composeContent } from './compose.js'
+import { hunkPath } from './diff.js'
 import type { FileChange, Hunk } from './diff.js'
 import type { Plan } from './plan.js'
 
@@ -42,7 +43,7 @@ export async function replay(
     for (const chapter of plan.chapters) {
       const chapterHunkIds = new Set(chapter.hunkIds)
       const touched = new Set<string>(chapter.filePaths)
-      for (const id of chapter.hunkIds) touched.add(id.slice(0, id.lastIndexOf('#')))
+      for (const id of chapter.hunkIds) touched.add(hunkPath(id))
 
       for (const path of touched) {
         const change = byPath.get(path)

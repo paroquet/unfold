@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createTempRepo } from '../helpers/repo.js'
-import { computeChanges } from '../../src/narrate/diff.js'
+import { computeChanges, hunkPath } from '../../src/narrate/diff.js'
 
 describe('computeChanges', () => {
   it('区分新增、修改、删除，并给出终态与 base 态的 blob', async () => {
@@ -75,5 +75,19 @@ describe('computeChanges', () => {
     const changes = await computeChanges(repo.dir, base, head)
     expect(changes.map((c) => `${c.path}:${c.kind}`)).toEqual(['new.txt:add', 'old.txt:delete'])
     await repo.cleanup()
+  })
+})
+
+describe('hunkPath', () => {
+  it('用最后一个 # 切分，不受路径内含 # 的干扰', () => {
+    expect(hunkPath('src/a.ts#0')).toBe('src/a.ts')
+    // 冷门但真实场景：文件名自己就带 #，例如 `a#0.ts`。
+    // 这里的 hunk id 是 `a#0.ts#0`——最后一个 # 才是分隔符，前面的
+    // `#0` 是文件名的一部分，不能被 startsWith 前缀匹配误判成属于文件 `a`。
+    expect(hunkPath('a#0.ts#0')).toBe('a#0.ts')
+  })
+
+  it('没有 # 分隔符时抛错，而不是静默产出错误路径', () => {
+    expect(() => hunkPath('no-hash-here')).toThrow()
   })
 })
