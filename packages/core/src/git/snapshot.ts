@@ -19,6 +19,20 @@ const SNAPSHOT_INDEX = 'unfold-snapshot-index'
  * 零干扰：不动工作区、不动真实 index、不碰 stash 栈（spec §4）。
  * 临时 index 必须落在 git dir 里而不是 worktree 里，否则会被自己的
  * `git add -A` 抓进 tree。
+ *
+ * **前置条件（未强制校验，调用方必须自己保证）：同一个 repo 上不得并发
+ * 调用 `snapshot()`。** 原因：临时 index 用固定文件名
+ * `<git-dir>/unfold-snapshot-index`，两次并发调用会共用同一个临时
+ * index、互相踩踏彼此的 read-tree / add / write-tree，产出的快照可能
+ * 是两次调用状态的混合体，且 `finally` 里的 `rm` 还可能把另一次调用
+ * 尚未读完的 index 删掉。Plan 4 的 VS Code 包会从事件回调里调用
+ * `narrate()`（因而调用 `snapshot()`）——回调可能连续触发，调用方必须
+ * 自己序列化（例如一个仓库同时只允许一次 in-flight 的 narrate）。
+ *
+ * 另见 `newReviewId`（state/paths.ts）：reviewId 的唯一性来源是「时间戳
+ * （含毫秒）+ 随机后缀」而不是单纯的秒级时间戳，避免同一秒内两次
+ * *不*并发但先后调用的 narrate 撞上同一个 `refs/unfold/<reviewId>/…`
+ * ref，导致 `pinSnapshot` 覆盖掉上一轮快照的唯一可达 ref。
  */
 export async function snapshot(repo: string): Promise<Snapshot> {
   const gitDir = await git(repo, ['rev-parse', '--absolute-git-dir'])

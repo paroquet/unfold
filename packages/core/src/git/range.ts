@@ -28,20 +28,24 @@ async function tryParseRef(repo: string, ref: string): Promise<string | null> {
 }
 
 /**
- * 调用 merge-base，允许的唯一良性错误是"无共同祖先"（exit 1 且 stdout/stderr 都空）。
+ * 调用 merge-base，允许的唯一良性错误是"无共同祖先"（exit 1 且 stderr 为空）。
  * 其他所有错误都被认为是真故障，抛出。
+ *
+ * 注意：这里只查 `stderr`，不是「stdout/stderr 都空」——`GitError`
+ * （见 git/exec.ts）根本不携带 stdout，构造时压根没收集这个字段，无从
+ * 校验。判据实际上只有 `code === 1 && stderr === ''` 这一条。
  */
 async function mergeBases(repo: string, sha: string): Promise<string | null> {
   try {
     return await git(repo, ['merge-base', sha, 'HEAD'])
   } catch (err) {
     if (err instanceof GitError) {
-      // 唯一允许的良性错误：无共同祖先（exit 1 且 stderr 都空）
+      // 唯一允许的良性错误：无共同祖先（exit 1 且 stderr 为空）
       if (err.code === 1 && err.stderr === '') {
         return null
       }
     }
-    // 所有其他错误（包括 stdout/stderr 非空、code 不是 1 等）都是真错误
+    // 所有其他错误（包括 stderr 非空、code 不是 1 等）都是真错误
     throw err
   }
 }
