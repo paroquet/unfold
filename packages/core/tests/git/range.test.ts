@@ -104,7 +104,7 @@ describe('resolveBase', () => {
 
     // 删除了 tracking 分支（模拟 stale tracking）
     await repo.write('a.txt', '2\n')
-    const head = await repo.commit('work')
+    await repo.commit('work')
 
     // 即使 upstream tracking 配置存在但 ref 已失效，也应该安全地落到下一档（HEAD）
     // 而不是抛错
