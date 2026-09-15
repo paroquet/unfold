@@ -63,4 +63,50 @@ describe('toCodeTours', () => {
     expect(tours[0]!.steps[0]!.description).toBe('第 1 章 — img1.bin')
     expect(tours[1]!.steps[0]!.description).toBe('第 2 章 — img2.bin')
   })
+
+  it('已删除的文件不产生 step（D2 回归）：叙事 worktree 停在终态，该文件已不存在', () => {
+    const deleted: FileChange = {
+      path: 'src/gone.ts', kind: 'delete', binary: false, mode: '', blob: null,
+      oldMode: '100644', oldBlob: 'a'.repeat(40),
+      hunks: [{ id: 'src/gone.ts#0', oldStart: 1, oldLines: 1, newStart: 0, newLines: 0, lines: ['-bye'] }],
+    }
+    const deletedBinary: FileChange = {
+      path: 'img.bin', kind: 'delete', binary: true, mode: '', blob: null,
+      oldMode: '100644', oldBlob: 'a'.repeat(40), hunks: [],
+    }
+    const p: Plan = {
+      version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule',
+      chapters: [
+        {
+          key: 'core', index: 1, title: '核心逻辑', intro: 'x',
+          hunkIds: ['src/gone.ts#0'], filePaths: ['src/gone.ts', 'img.bin'],
+        },
+      ],
+    }
+    const tours = toCodeTours(p, [deleted, deletedBinary], 'unfold/rev-1')
+    expect(tours[0]!.steps).toEqual([])
+  })
+
+  it('同章里删除文件与正常修改的文件混在一起，只有正常文件产生 step', () => {
+    const deleted: FileChange = {
+      path: 'src/gone.ts', kind: 'delete', binary: false, mode: '', blob: null,
+      oldMode: '100644', oldBlob: 'a'.repeat(40),
+      hunks: [{ id: 'src/gone.ts#0', oldStart: 1, oldLines: 1, newStart: 0, newLines: 0, lines: ['-bye'] }],
+    }
+    const modified = change('src/kept.ts', 5)
+    const p: Plan = {
+      version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule',
+      chapters: [
+        {
+          key: 'core', index: 1, title: '核心逻辑', intro: 'x',
+          hunkIds: ['src/gone.ts#0', 'src/kept.ts#0'],
+          filePaths: ['src/gone.ts', 'src/kept.ts'],
+        },
+      ],
+    }
+    const tours = toCodeTours(p, [deleted, modified], 'unfold/rev-1')
+    expect(tours[0]!.steps).toEqual([
+      { file: 'src/kept.ts', line: 5, description: '核心逻辑 — src/kept.ts' },
+    ])
+  })
 })
