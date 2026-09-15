@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createTempRepo } from '../helpers/repo.js'
 import { computeChanges } from '../../src/narrate/diff.js'
 import { RulePlanner, classifyPath } from '../../src/narrate/rule-planner.js'
-import type { Plan, PlanContext } from '../../src/narrate/plan.js'
+import type { PlanContext } from '../../src/narrate/plan.js'
 
 async function ctxFor(files: Record<string, string>): Promise<PlanContext> {
   const repo = await createTempRepo()
@@ -57,7 +57,7 @@ describe('RulePlanner', () => {
     for (const ch of plan.chapters) expect(ch.intro.length).toBeGreaterThan(0)
   })
 
-  it('二进制文件也要被分进某一章（走整文件）', async () => {
+  it('二进制文件没有 hunk，只能靠 filePaths 归入某一章；空「其余」章不应被造出来', async () => {
     const repo = await createTempRepo()
     const { writeFile } = await import('node:fs/promises')
     const { join } = await import('node:path')
@@ -69,24 +69,33 @@ describe('RulePlanner', () => {
 
     const plan = await new RulePlanner().plan({ base, snapshot: head, changes })
     const covered = plan.chapters.flatMap((c) => c.hunkIds)
-    // 二进制无 hunk，靠「其余」章兜底覆盖文件本身
     expect(covered).toEqual([])
-    expect(plan.chapters.at(-1)!.title).toContain('其余')
+    // img.bin 没有 hunk，必须靠 filePaths 才能验证它真的被覆盖
+    const owner = plan.chapters.find((c) => c.filePaths.includes('img.bin'))
+    expect(owner).toBeDefined()
+    // classifyPath 是穷尽的，「其余」章恒为空，不应再被 materialize 成一个空章
+    const last = plan.chapters.at(-1)!
+    expect(last.hunkIds.length + last.filePaths.length).toBeGreaterThan(0)
     await repo.cleanup()
   })
 
-  it('跨轮稳定：上一轮已分配过的文件保持原章号', async () => {
-    const ctx = await ctxFor({ 'src/types.ts': 'a\n', 'src/engine.ts': 'b\n' })
-    const first = await new RulePlanner().plan(ctx)
-    const engineChapter = first.chapters.find((c) =>
-      c.hunkIds.some((id) => id.startsWith('src/engine.ts#')),
+  it('跨轮稳定：文件按 key（概念章节）保持归属，即便本轮分桶让 index 变化', async () => {
+    // 第一轮：types.ts（contract）+ engine.ts（core）两个桶都非空
+    const first = await ctxFor({ 'src/types.ts': 'a\n', 'src/engine.ts': 'b\n' })
+    const firstPlan = await new RulePlanner().plan(first)
+    const engineChapterFirst = firstPlan.chapters.find((c) =>
+      c.filePaths.includes('src/engine.ts'),
     )!
+    expect(engineChapterFirst.key).toBe('core')
 
-    const previous: Plan = first
-    const second = await new RulePlanner().plan({ ...ctx, previous })
-    const engineChapter2 = second.chapters.find((c) =>
-      c.hunkIds.some((id) => id.startsWith('src/engine.ts#')),
+    // 第二轮：只剩 engine.ts 一个改动，本轮自然分桶只有一个「核心」章，
+    // 若拿上一轮的 index 当锚点会把它错误地拽进别的章（或不存在的兜底章）。
+    const second = await ctxFor({ 'src/engine.ts': 'b2\n' })
+    const secondPlan = await new RulePlanner().plan({ ...second, previous: firstPlan })
+    const engineChapterSecond = secondPlan.chapters.find((c) =>
+      c.filePaths.includes('src/engine.ts'),
     )!
-    expect(engineChapter2.index).toBe(engineChapter.index)
+    expect(engineChapterSecond.key).toBe('core')
+    expect(engineChapterSecond.title).toContain('核心')
   })
 })

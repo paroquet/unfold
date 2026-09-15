@@ -34,7 +34,7 @@ export function classifyPath(path: string): PathClass {
 }
 
 function emptyChapter(index: number, cls: PathClass): Chapter {
-  return { index, title: TITLES[cls], intro: INTROS[cls], hunkIds: [], filePaths: [] }
+  return { index, key: cls, title: TITLES[cls], intro: INTROS[cls], hunkIds: [], filePaths: [] }
 }
 
 /**
@@ -45,13 +45,14 @@ export class RulePlanner implements ChapterPlanner {
   readonly id = 'rule'
 
   async plan(ctx: PlanContext): Promise<Plan> {
-    const previousChapterOf = new Map<string, number>()
+    // 跨轮稳定：记录「文件 → 上一轮所在章的 key」。用 key 而非 index，
+    // 因为 index 由本轮哪些桶非空决定，同一概念章节的 index 在轮次间可能不同
+    // （例如某轮没有 contract 改动，core 就会从 index 2 变成 index 1）。
+    // 有 hunk 的文件其路径必在 filePaths 里，无需再从 hunkIds 重复填一遍。
+    const previousChapterKeyOf = new Map<string, string>()
     if (ctx.previous !== undefined) {
       for (const ch of ctx.previous.chapters) {
-        for (const p of ch.filePaths) previousChapterOf.set(p, ch.index)
-        for (const id of ch.hunkIds) {
-          previousChapterOf.set(id.slice(0, id.lastIndexOf('#')), ch.index)
-        }
+        for (const p of ch.filePaths) previousChapterKeyOf.set(p, ch.key)
       }
     }
 
@@ -72,21 +73,26 @@ export class RulePlanner implements ChapterPlanner {
       chapters.push(ch)
     }
 
-    // 「其余」章：兜住一切没被上面覆盖的文件，保证 verify 恒真（spec §6.3）
+    // 「其余」章：兜住一切没被上面覆盖的文件，保证 verify 恒真（spec §6.3）。
+    // classifyPath 是穷尽的，rest 理论上恒为空；只在真的非空时才 materialize，
+    // 避免每轮都产出一个永久空章（下游按章节数一一提交，空章 = 空 commit）。
     const covered = new Set(chapters.flatMap((c) => c.filePaths))
     const rest = ctx.changes.filter((c) => !covered.has(c.path))
-    const restChapter: Chapter = {
-      index: chapters.length + 1,
-      title: '其余',
-      intro: '前面各章未覆盖的改动，一并在此落地，确保终态与原分支逐字节一致。',
-      hunkIds: rest.flatMap((c) => c.hunks.map((h) => h.id)),
-      filePaths: rest.map((c) => c.path),
+    if (rest.length > 0) {
+      chapters.push({
+        index: chapters.length + 1,
+        key: 'rest',
+        title: '其余',
+        intro: '前面各章未覆盖的改动，一并在此落地，确保终态与原分支逐字节一致。',
+        hunkIds: rest.flatMap((c) => c.hunks.map((h) => h.id)),
+        filePaths: rest.map((c) => c.path),
+      })
     }
-    chapters.push(restChapter)
 
-    // 跨轮稳定：已分配过的文件回到原章号（spec §7.3）
-    if (previousChapterOf.size > 0) {
-      applyPreviousAssignment(chapters, ctx, previousChapterOf)
+    // 跨轮稳定：按 key 把上一轮已分配过的文件放回同一概念章节（spec §7.3）。
+    // 若上一轮的 key 在本轮不存在，文件保持规则本身给出的位置，不凭空造章。
+    if (previousChapterKeyOf.size > 0) {
+      applyPreviousAssignment(chapters, ctx, previousChapterKeyOf)
     }
 
     return {
@@ -102,16 +108,16 @@ export class RulePlanner implements ChapterPlanner {
 function applyPreviousAssignment(
   chapters: Chapter[],
   ctx: PlanContext,
-  previousChapterOf: Map<string, number>,
+  previousChapterKeyOf: Map<string, string>,
 ): void {
-  const byIndex = new Map(chapters.map((c) => [c.index, c]))
+  const byKey = new Map(chapters.map((c) => [c.key, c]))
   for (const change of ctx.changes) {
-    const want = previousChapterOf.get(change.path)
-    if (want === undefined) continue
-    const target = byIndex.get(want)
+    const wantKey = previousChapterKeyOf.get(change.path)
+    if (wantKey === undefined) continue
+    const target = byKey.get(wantKey)
     if (target === undefined) continue
     for (const ch of chapters) {
-      if (ch.index === want) continue
+      if (ch.key === wantKey) continue
       ch.filePaths = ch.filePaths.filter((p) => p !== change.path)
       ch.hunkIds = ch.hunkIds.filter((id) => !id.startsWith(`${change.path}#`))
     }

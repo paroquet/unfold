@@ -3,6 +3,13 @@ import type { FileChange } from './diff.js'
 export interface Chapter {
   /** 从 1 起，连续 */
   index: number
+  /**
+   * planner 指派的稳定标识，跨轮语义不变（例如 RulePlanner 的 PathClass，
+   * 或兜底章的 'rest'）。`index` 会因为「本轮哪些桶非空」而在轮次间变化，
+   * 不能拿它当跨轮锚点；`key` 才是 applyPreviousAssignment 用来找回
+   * 「同一概念章节」的依据（spec §7.3）。
+   */
+  key: string
   title: string
   /** 「为什么先看这个」 */
   intro: string
