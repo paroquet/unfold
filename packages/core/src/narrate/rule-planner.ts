@@ -6,11 +6,17 @@ export type PathClass = 'contract' | 'core' | 'wiring' | 'test-doc'
 
 const ORDER: PathClass[] = ['contract', 'core', 'wiring', 'test-doc']
 
+/**
+ * 不写死绝对层号（如「第 1 层」）——顺序号由 codetour.ts 按本轮实际非空
+ * 的章节数从 1 连续编号（spec §6.6：`${chapter.index}. ${chapter.title}`）。
+ * 若这里也带上写死的层号，两边拼起来会出现「3. 第 4 层：测试与文档」这种
+ * 顺序号与层号对不上的怪状况——某一层空缺时，前者顺延、后者不变。
+ */
 const TITLES: Record<PathClass, string> = {
-  contract: '第 1 层：契约',
-  core: '第 2 层：核心逻辑',
-  wiring: '第 3 层：接线与调用方',
-  'test-doc': '第 4 层：测试与文档',
+  contract: '契约',
+  core: '核心逻辑',
+  wiring: '接线与调用方',
+  'test-doc': '测试与文档',
 }
 
 const INTROS: Record<PathClass, string> = {

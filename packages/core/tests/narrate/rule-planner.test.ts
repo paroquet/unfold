@@ -43,6 +43,11 @@ describe('RulePlanner', () => {
     expect(titles[2]).toContain('接线')
     expect(titles[3]).toContain('测试与文档')
 
+    // D1 回归：标题里不能写死绝对层号。顺序号只该由 codetour 的章号给出；
+    // 若标题自己也带「第 N 层」，某一层为空时两边就会对不上（例如冒烟
+    // 实测过的 "3. 第 4 层：测试与文档"）。
+    for (const title of titles) expect(title).not.toMatch(/第\s*\d+\s*层/)
+
     const all = plan.chapters.flatMap((c) => c.hunkIds)
     const expected = ctx.changes.flatMap((c) => c.hunks.map((h) => h.id))
     expect(all.slice().sort()).toEqual(expected.slice().sort())
