@@ -72,6 +72,23 @@ describe('narrate 端到端', () => {
     })
     expect(stdout.trim()).toBe(result.branch)
 
+    // worktree 真的挂在叙事的 tip 上，不是随便一个 tree 相同的 commit
+    // （例如误挂到 snap.commit 上）——否则 `git log unfold/<id>` 会变成
+    // 一个孤零零的 snapshot commit，章节链完全丢失，只验证分支名看不出来。
+    const tipStdout = await run('git', ['rev-parse', 'HEAD'], { cwd: result.worktree })
+    expect(tipStdout.stdout.trim()).toBe(result.tip)
+
+    // 分支上恰好挂着 `chapters` 条章节 commit（base..tip 这一段），
+    // 而不是塌缩成一个孤零零的 snapshot commit
+    const logStdout = await run(
+      'git',
+      ['log', '--format=%H', `${result.base}..${result.branch}`],
+      { cwd: repo.dir },
+    )
+    expect(logStdout.stdout.trim().split('\n').filter((l) => l !== '').length).toBe(
+      result.chapters,
+    )
+
     await rm(result.reviewRoot, { recursive: true, force: true })
     await repo.cleanup()
   })
