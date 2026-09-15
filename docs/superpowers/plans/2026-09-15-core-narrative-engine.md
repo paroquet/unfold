@@ -6,14 +6,18 @@
 
 **Architecture:** monorepo 的 `packages/core`，纯 TypeScript、零 `vscode` import、零网络。全部 git 操作走 plumbing 子进程（`read-tree` / `update-index` / `write-tree` / `commit-tree`），不 checkout、不 apply patch。章节规划在本 plan 里只实现确定性的规则版（AI 版是 Plan 2），但 `plan.json` 与 `replay` 一次按 hunk 粒度做对。
 
-**Tech Stack:** Node 20.20.2 · pnpm 10.12.4 · TypeScript 5.9.3 · vitest 4.1.11 · ESM
+**Tech Stack:** Node 24.21.0 (LTS Krypton) · pnpm 10.12.4（经 corepack）· TypeScript 7.0.2 · vitest 5.0.0 · ESM
 
 **Spec:** `docs/superpowers/specs/2026-09-15-unfold-design.md`
 
 ## Global Constraints
 
-- **Node 版本下限 `>=20.19`**。本机是 v20.20.2。**`vitest` 必须钉 `4.1.11`**——`vitest@5` 的 engines 是 `^22.12.0||^24.0.0||>=26.0.0`，在 Node 20 上装不了。
-- **TypeScript 钉 `5.9.3`**（5.x 成熟线）。latest 是 7.0.2（原生重写版），本项目的风险预算要花在 git plumbing 和 LSP 集成上，不花在构建工具上。升级到 7.x 是以后的独立决定。
+- **Node 用 24.21.0（LTS Krypton）**，仓库根放 `.nvmrc`，开工前 `nvm use`。`engines` 写 `>=22.12.0`——这是 `vitest@5` 的实际下限（其 engines 为 `^22.12.0||^24.0.0||>=26.0.0`）。**本机默认 node 仍是 v20.20.2，那个版本装不了 vitest 5**，所以每个新终端都要先 `nvm use`。不要改 nvm 的 default，别的项目还在用 20。
+- **pnpm 经 corepack 激活**：node 24 下没有全局 pnpm（nvm 的全局包按版本隔离），但有 corepack 0.36.0。`corepack enable pnpm` 后由根 `package.json` 的 `packageManager: "pnpm@10.12.4"` 决定版本——已实测可用。
+- **TypeScript 用 7.0.2（latest，原生重写版）**，`vitest` 用 `5.0.0`。已在 node 24.21.0 上实测：`tsc --noEmit` 与构建（产出 `.d.ts` + sourcemap）均通过，vitest 5 跑通。并且**反向验证过下面三个严格选项确实在报错、不是被静默忽略**：
+  - `noUncheckedIndexedAccess` → `TS2322: Type 'string | undefined' is not assignable to type 'string'`
+  - `exactOptionalPropertyTypes` → `TS2375: ... with 'exactOptionalPropertyTypes: true'`
+  - `moduleResolution: Node16` 缺 `.js` 后缀 → `TS2835: Relative import paths need explicit file extensions`
 - **ESM + `module: Node16`**：所有相对 import **必须带 `.js` 后缀**（源码里写 `./exec.js` 指向 `exec.ts`）。这是 Node16 解析规则，不是笔误。
 - **`packages/core` 不得出现 `import ... from 'vscode'`**，也不得有任何网络调用。这是 spec §2 的分界线规则，由编译器守。
 - **许可证**：根 `package.json` 与每个子包 `package.json` 均写 `"license": "AGPL-3.0-only"`；README 增加 License 节，原文 `Licensed under the GNU AGPL v3.0 only (SPDX: AGPL-3.0-only).`
@@ -26,6 +30,7 @@
 ### Task 1: monorepo 骨架、许可证、测试基建
 
 **Files:**
+- Create: `.nvmrc`
 - Create: `package.json`
 - Create: `pnpm-workspace.yaml`
 - Create: `tsconfig.base.json`
@@ -43,7 +48,17 @@
 - Produces: `TempRepo` 测试夹具——`createTempRepo(): Promise<TempRepo>`，其中
   `TempRepo = { dir: string; git(...args: string[]): Promise<string>; write(rel: string, content: string): Promise<void>; rm(rel: string): Promise<void>; commit(msg: string): Promise<string>; cleanup(): Promise<void> }`。后续每个 Task 的测试都用它。
 
-- [ ] **Step 1: 建工作区骨架文件**
+- [ ] **Step 1: 切 Node、启用 pnpm、建工作区骨架文件**
+
+先把运行环境切对（本机默认还是 node 20，在那上面 `pnpm install` 会因为 vitest 5 的 engines 直接失败）：
+
+```bash
+echo '24.21.0' > .nvmrc
+nvm use          # 读 .nvmrc
+corepack enable pnpm
+node --version   # 期望 v24.21.0
+pnpm --version   # 期望 10.12.4（由 packageManager 字段决定）
+```
 
 `package.json`：
 
@@ -52,7 +67,7 @@
   "name": "unfold-monorepo",
   "private": true,
   "license": "AGPL-3.0-only",
-  "engines": { "node": ">=20.19" },
+  "engines": { "node": ">=22.12.0" },
   "packageManager": "pnpm@10.12.4",
   "scripts": {
     "build": "pnpm -r build",
@@ -61,9 +76,9 @@
     "test:contract": "UNFOLD_CONTRACT=1 vitest run"
   },
   "devDependencies": {
-    "@types/node": "20.19.43",
-    "typescript": "5.9.3",
-    "vitest": "4.1.11"
+    "@types/node": "24.13.4",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
   }
 }
 ```
@@ -117,6 +132,12 @@ node_modules/
 dist/
 *.tsbuildinfo
 .unfold/
+```
+
+`.nvmrc`：
+
+```
+24.21.0
 ```
 
 - [ ] **Step 2: 建 core 包**
