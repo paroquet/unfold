@@ -43,12 +43,27 @@ export interface GitOptions {
   trim?: boolean
 }
 
+/**
+ * git 子进程要清洗掉的环境变量：一旦存在，git 会优先信它们而不是 cwd，
+ * 「所有 git 子进程调用必须显式传 cwd」这条全局约束就被环境变量本身
+ * 推翻了。本工具的目标场景是被 agent / orca / git hook 拉起，这些环境
+ * 里 GIT_DIR 等变量很可能已经设着——一旦如此，Unfold 会操作到另一个仓库
+ * 上，零干扰承诺直接失效。调用点若确实需要注入（snapshot / replay 用
+ * GIT_INDEX_FILE 指向专用临时 index），走 opts.env 显式声明，会在下面
+ * 清洗之后再叠加回去，不受影响。
+ */
+const GIT_ENV_TO_SCRUB = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'] as const
+
 /** 跑一条 git 命令。非零退出抛 GitError。 */
 export async function git(cwd: string, args: string[], opts: GitOptions = {}): Promise<string> {
   try {
+    const baseEnv = { ...process.env }
+    for (const key of GIT_ENV_TO_SCRUB) delete baseEnv[key]
+    const env = opts.env ? { ...baseEnv, ...opts.env } : baseEnv
+
     const child = execFileAsync('git', args, {
       cwd,
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      env,
       maxBuffer: 256 * 1024 * 1024,
     })
     if (opts.input !== undefined) {
