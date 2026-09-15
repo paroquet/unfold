@@ -71,21 +71,52 @@ describe('resolveBase', () => {
     await repo.cleanup()
   })
 
-  it('真错误（stderr 非空）必须抛出而不是静默退化', async () => {
+  it('真错误（merge-base 失败）必须抛出而不是静默退化', async () => {
     const repo = await createTempRepo()
     await repo.write('a.txt', '1\n')
     await repo.commit('commit')
 
-    // 测试：rev-parse 探测时如果遇到 stderr 非空的错误，应该抛出而不是当作"ref 不存在"
-    // 使用 @{u}@{u} 这样的非法 ref 引用格式，会导致 git 输出 stderr 和非 0 exit code
-    const badRef = '@{u}@{u}'
+    // 构造一个指向 blob 对象（非树或提交）的 ref
+    // blob 对象在 merge-base 中会导致错误（exit 128 且 stderr 非空）
+    await repo.write('blob-file.txt', 'blob content\n')
+    const blob = await repo.git('hash-object', '-w', 'blob-file.txt')
+    await repo.git('update-ref', 'refs/weird/thing', blob)
 
-    // rev-parse --verify --quiet 会因为非法的 ref 而抛出带有 stderr 的 GitError
-    // resolveBase 应该让这个错误传播出来，而不是当作"ref 不存在"返回 HEAD
+    // merge-base 会因为 blob 对象而抛出真错误
+    // resolveBase 应该让这个错误传播出来，而不是安全地返回 HEAD
     await expect(
-      resolveBase(repo.dir, { defaultBranch: badRef }),
+      resolveBase(repo.dir, { defaultBranch: 'refs/weird/thing' }),
     ).rejects.toThrow()
 
     await repo.cleanup()
+  })
+
+  it('stale tracking（配置了但 ref 失效）应该安全地落到下一档', async () => {
+    const repo = await createTempRepo()
+    await repo.write('a.txt', '1\n')
+    const base = await repo.commit('base')
+
+    // 创建一个分支并配置为 upstream
+    await repo.git('branch', 'origin-main')
+    await repo.git('checkout', '-q', '-b', 'feature')
+    await repo.git('config', 'branch.feature.remote', '.')
+    await repo.git('config', 'branch.feature.merge', 'refs/heads/deleted-branch')
+
+    // 删除了 tracking 分支（模拟 stale tracking）
+    await repo.write('a.txt', '2\n')
+    const head = await repo.commit('work')
+
+    // 即使 upstream tracking 配置存在但 ref 已失效，也应该安全地落到下一档（HEAD）
+    // 而不是抛错
+    const r = await resolveBase(repo.dir, { defaultBranch: 'origin-main' })
+    // 由于 origin-main 存在且与 HEAD 有分歧点，应该返回 base（分歧点）
+    expect(r).toEqual({ base, source: 'default-branch' })
+
+    await repo.cleanup()
+  })
+
+  it('路径不存在时应该抛错（证明顶层 rev-parse HEAD 没被吞掉）', async () => {
+    // 调用不存在的仓库路径
+    await expect(resolveBase('/nonexistent/repo/path')).rejects.toThrow()
   })
 })

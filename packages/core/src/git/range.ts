@@ -15,24 +15,33 @@ export interface ResolveBaseOptions {
 }
 
 /**
- * 尝试执行 git 命令，区分良性错误（ref 不存在、无共同祖先）和真错误。
- * 良性错误：exit 非 0 且 stderr 为空 → 返回 null
- * 真错误：stderr 非空 → 抛出
- * 成功：返回 stdout
+ * 尝试解析 ref，任何失败都返回 null（良性）。
+ * 用于 upstream 和 defaultBranch 的 sha 门控探测。
  */
-async function tryGit(repo: string, args: string[]): Promise<string | null> {
+async function tryParseRef(repo: string, ref: string): Promise<string | null> {
   try {
-    return await git(repo, args)
+    return await git(repo, ['rev-parse', '--verify', '--quiet', ref])
+  } catch {
+    // 任何解析失败都是良性的——ref 不存在、stale tracking 等都落到下一档
+    return null
+  }
+}
+
+/**
+ * 调用 merge-base，允许的唯一良性错误是"无共同祖先"（exit 1 且 stdout/stderr 都空）。
+ * 其他所有错误都被认为是真故障，抛出。
+ */
+async function mergeBases(repo: string, sha: string): Promise<string | null> {
+  try {
+    return await git(repo, ['merge-base', sha, 'HEAD'])
   } catch (err) {
     if (err instanceof GitError) {
-      // 如果 stderr 非空，说明是真错误（如对象库损坏、权限问题）
-      if (err.stderr !== '') {
-        throw err
+      // 唯一允许的良性错误：无共同祖先（exit 1 且 stderr 都空）
+      if (err.code === 1 && err.stderr === '') {
+        return null
       }
-      // stderr 为空的错误是良性的（如 ref 不存在、无共同祖先）
-      return null
     }
-    // spawn 错误（如 git 二进制不存在）也要抛出
+    // 所有其他错误（包括 stdout/stderr 非空、code 不是 1 等）都是真错误
     throw err
   }
 }
@@ -54,21 +63,20 @@ export async function resolveBase(
     return { base, source: 'explicit' }
   }
 
-  // 尝试 upstream：先探测 upstream 是否配置（避免调用 merge-base 时 @{upstream} 不存在的 stderr）
-  const currentBranch = await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])
-  const upstreamBranch = await tryGit(repo, ['config', `branch.${currentBranch}.merge`])
-  if (upstreamBranch !== null) {
-    // upstream 已配置，调用 merge-base
-    const mb = await tryGit(repo, ['merge-base', '@{upstream}', 'HEAD'])
+  // 尝试 upstream：sha 门控探测
+  const upstreamSha = await tryParseRef(repo, '@{upstream}')
+  if (upstreamSha !== null) {
+    // upstream ref 可解析，用其 sha 调 merge-base
+    const mb = await mergeBases(repo, upstreamSha)
     if (mb !== null && mb !== head) return { base: mb, source: 'upstream' }
   }
 
-  // 尝试默认分支：先探测 ref 是否可解析
+  // 尝试默认分支：sha 门控探测
   const defaultBranch = opts.defaultBranch ?? 'main'
-  const defaultExists = await tryGit(repo, ['rev-parse', '--verify', '--quiet', defaultBranch])
-  if (defaultExists !== null) {
-    // 默认分支存在，调用 merge-base
-    const mb = await tryGit(repo, ['merge-base', defaultBranch, 'HEAD'])
+  const defaultSha = await tryParseRef(repo, defaultBranch)
+  if (defaultSha !== null) {
+    // defaultBranch ref 可解析，用其 sha 调 merge-base
+    const mb = await mergeBases(repo, defaultSha)
     if (mb !== null && mb !== head) return { base: mb, source: 'default-branch' }
   }
 
