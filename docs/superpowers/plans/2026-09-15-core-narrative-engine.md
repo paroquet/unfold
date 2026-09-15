@@ -1063,7 +1063,7 @@ git commit -m 'feat(core): diff 与 hunk 模型'
 **Interfaces:**
 - Consumes: `FileChange`, `Hunk` (Task 4)
 - Produces:
-  - `interface Chapter { index: number; title: string; intro: string; hunkIds: string[]; filePaths: string[] }`（`index` 从 1 起；`filePaths` 是「该文件最终落地的章节」，无 hunk 的文件也在此声明）
+  - `interface Chapter { key: string; index: number; title: string; intro: string; hunkIds: string[]; filePaths: string[] }`（`index` 从 1 起，是**位置序号**、跨轮会变；`key` 是 planner 指派的**稳定标识**，跨轮匹配一律用它——RulePlanner 取 PathClass，兜底章取 `'rest'`；`filePaths` 是「该文件最终落地的章节」，无 hunk 的文件也在此声明）
   - `interface Plan { version: 1; base: string; snapshot: string; plannerId: string; chapters: Chapter[] }`
   - `interface PlanContext { base: string; snapshot: string; changes: FileChange[]; previous?: Plan }`
   - `interface ChapterPlanner { readonly id: string; plan(ctx: PlanContext): Promise<Plan> }`
@@ -1182,7 +1182,15 @@ Expected: FAIL，无法解析 `../../src/narrate/plan.js`
 import type { FileChange } from './diff.js'
 
 export interface Chapter {
-  /** 从 1 起，连续 */
+  /**
+   * planner 指派的稳定标识，跨轮不变。RulePlanner 取 PathClass
+   * （'contract'|'core'|'wiring'|'test-doc'），兜底章取 'rest'。
+   *
+   * 跨轮归属**必须**按 key 匹配而非 index：index 是位置序号，
+   * 会随「本轮哪些类非空」而改变，拿它做锚点会把文件塞进错误的章。
+   */
+  key: string
+  /** 位置序号，从 1 起连续；跨轮可能合法变动 */
   index: number
   title: string
   /** 「为什么先看这个」 */
@@ -1381,6 +1389,7 @@ git commit -m 'feat(core): Plan 类型与规则版 ChapterPlanner'
 - Produces:
   - `interface ValidationIssue { code: 'hunk-missing' | 'hunk-duplicated' | 'hunk-unknown' | 'file-missing' | 'file-duplicated' | 'file-unknown' | 'chapter-index' | 'cross-round-drift'; message: string }`
   - `validatePlan(plan: Plan, ctx: PlanContext): ValidationIssue[]` —— 空数组表示通过
+  - **跨轮漂移一律按 `Chapter.key` 比对，不得用 `index`**：`index` 是位置序号，会随「本轮哪些类非空」合法变动，用它判漂移会大量误报
 
 - [ ] **Step 1: 写失败测试**
 
@@ -1413,47 +1422,62 @@ function plan(chapters: Plan['chapters']): Plan {
 describe('validatePlan', () => {
   it('完全覆盖且不重复时通过', () => {
     const c = ctx([change('a.ts', 2)])
-    const p = plan([{ index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0', 'a.ts#1'], filePaths: ['a.ts'] }])
+    const p = plan([{ key: 'k1', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0', 'a.ts#1'], filePaths: ['a.ts'] }])
     expect(validatePlan(p, c)).toEqual([])
   })
 
   it('漏掉 hunk 会报 hunk-missing', () => {
     const c = ctx([change('a.ts', 2)])
-    const p = plan([{ index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] }])
+    const p = plan([{ key: 'k1', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] }])
     expect(validatePlan(p, c).map((i) => i.code)).toContain('hunk-missing')
   })
 
   it('同一 hunk 分到两章会报 hunk-duplicated', () => {
     const c = ctx([change('a.ts', 1)])
     const p = plan([
-      { index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
-      { index: 2, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: [] },
+      { key: 'k1', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+      { key: 'k2', index: 2, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: [] },
     ])
     expect(validatePlan(p, c).map((i) => i.code)).toContain('hunk-duplicated')
   })
 
   it('引用不存在的 hunk 会报 hunk-unknown', () => {
     const c = ctx([change('a.ts', 1)])
-    const p = plan([{ index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0', 'ghost.ts#0'], filePaths: ['a.ts'] }])
+    const p = plan([{ key: 'k1', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0', 'ghost.ts#0'], filePaths: ['a.ts'] }])
     expect(validatePlan(p, c).map((i) => i.code)).toContain('hunk-unknown')
   })
 
   it('章号不连续会报 chapter-index', () => {
     const c = ctx([change('a.ts', 1)])
-    const p = plan([{ index: 2, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] }])
+    const p = plan([{ key: 'k1', index: 2, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] }])
     expect(validatePlan(p, c).map((i) => i.code)).toContain('chapter-index')
   })
 
-  it('已分配文件换了章号会报 cross-round-drift', () => {
+  it('index 变了但 key 没变不算漂移（位置序号会随本轮非空的类合法变动）', () => {
+    const c0 = change('a.ts', 1)
+    const previous = plan([
+      { key: 'contract', index: 1, title: 't', intro: 'i', hunkIds: [], filePaths: [] },
+      { key: 'core', index: 2, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+    ])
+    // 本轮 contract 类为空、未产出章节，core 章的 index 因此从 2 变成 1
+    const shifted = plan([
+      { key: 'core', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+    ])
+    expect(validatePlan(shifted, ctx([c0], previous)).map((i) => i.code)).not.toContain(
+      'cross-round-drift',
+    )
+  })
+
+  it('已分配文件换了章（key 变化）会报 cross-round-drift', () => {
     const c0 = change('a.ts', 1)
     const c1 = change('b.ts', 1)
     const previous = plan([
-      { index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
-      { index: 2, title: 't', intro: 'i', hunkIds: ['b.ts#0'], filePaths: ['b.ts'] },
+      { key: 'contract', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+      { key: 'core', index: 2, title: 't', intro: 'i', hunkIds: ['b.ts#0'], filePaths: ['b.ts'] },
     ])
+    // a.ts 从 contract 章挪到了 core 章 —— 这才是真漂移
     const drifted = plan([
-      { index: 1, title: 't', intro: 'i', hunkIds: ['b.ts#0'], filePaths: ['b.ts'] },
-      { index: 2, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+      { key: 'core', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0', 'b.ts#0'], filePaths: ['a.ts', 'b.ts'] },
     ])
     const issues = validatePlan(drifted, ctx([c0, c1], previous))
     expect(issues.map((i) => i.code)).toContain('cross-round-drift')
@@ -1540,20 +1564,22 @@ export function validatePlan(plan: Plan, ctx: PlanContext): ValidationIssue[] {
   }
 
   if (ctx.previous !== undefined) {
-    const before = new Map<string, number>()
+    // 按 key 而非 index 比对：index 是位置序号，会随「本轮哪些类非空」
+    // 合法变动，拿它判漂移会大量误报
+    const before = new Map<string, string>()
     for (const ch of ctx.previous.chapters) {
-      for (const p of ch.filePaths) before.set(p, ch.index)
+      for (const p of ch.filePaths) before.set(p, ch.key)
     }
-    const after = new Map<string, number>()
+    const after = new Map<string, string>()
     for (const ch of plan.chapters) {
-      for (const p of ch.filePaths) after.set(p, ch.index)
+      for (const p of ch.filePaths) after.set(p, ch.key)
     }
-    for (const [p, wasIndex] of before) {
-      const nowIndex = after.get(p)
-      if (nowIndex !== undefined && nowIndex !== wasIndex) {
+    for (const [p, wasKey] of before) {
+      const nowKey = after.get(p)
+      if (nowKey !== undefined && nowKey !== wasKey) {
         issues.push({
           code: 'cross-round-drift',
-          message: `文件 ${p} 上一轮在第 ${wasIndex} 章，本轮变成第 ${nowIndex} 章；批注会漂移`,
+          message: `文件 ${p} 上一轮在「${wasKey}」章，本轮变成「${nowKey}」章；批注会漂移`,
         })
       }
     }
@@ -1804,8 +1830,8 @@ describe('replay', () => {
       snapshot: head,
       plannerId: 'manual',
       chapters: [
-        { index: 1, title: '前半', intro: 'i', hunkIds: [file.hunks[0]!.id], filePaths: [] },
-        { index: 2, title: '后半', intro: 'i', hunkIds: [file.hunks[1]!.id], filePaths: ['src/engine.ts'] },
+        { key: 'first', index: 1, title: '前半', intro: 'i', hunkIds: [file.hunks[0]!.id], filePaths: [] },
+        { key: 'second', index: 2, title: '后半', intro: 'i', hunkIds: [file.hunks[1]!.id], filePaths: ['src/engine.ts'] },
       ],
     }
 
@@ -2199,8 +2225,8 @@ const change = (path: string, newStart: number): FileChange => ({
 const plan: Plan = {
   version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule',
   chapters: [
-    { index: 1, title: '第 1 层：契约', intro: '先看类型。', hunkIds: ['src/types.ts#0'], filePaths: ['src/types.ts'] },
-    { index: 2, title: '其余', intro: '兜底。', hunkIds: ['src/engine.ts#0'], filePaths: ['src/engine.ts'] },
+    { key: 'contract', index: 1, title: '第 1 层：契约', intro: '先看类型。', hunkIds: ['src/types.ts#0'], filePaths: ['src/types.ts'] },
+    { key: 'core', index: 2, title: '第 2 层：核心逻辑', intro: '再看实现。', hunkIds: ['src/engine.ts#0'], filePaths: ['src/engine.ts'] },
   ],
 }
 
@@ -2222,7 +2248,7 @@ describe('toCodeTours', () => {
       path: 'img.bin', kind: 'modify', binary: true, mode: '100644',
       blob: 'b'.repeat(40), oldMode: '100644', oldBlob: 'a'.repeat(40), hunks: [],
     }
-    const p: Plan = { ...plan, chapters: [{ index: 1, title: '其余', intro: 'x', hunkIds: [], filePaths: ['img.bin'] }] }
+    const p: Plan = { ...plan, chapters: [{ key: 'core', index: 1, title: '第 2 层：核心逻辑', intro: 'x', hunkIds: [], filePaths: ['img.bin'] }] }
     const tours = toCodeTours(p, [binary], 'unfold/rev-1')
     expect(tours[0]!.steps).toEqual([
       { file: 'img.bin', line: 1, description: '其余 — img.bin' },
