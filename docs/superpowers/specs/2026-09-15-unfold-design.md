@@ -34,7 +34,8 @@ v1 **不含**：GitHub / PR 拉取、多人协作、forge 集成。
 | 8 | 叙事 worktree | **只要一个**，永远停在终态。左侧用 `toGitUri(uri, base)` 虚拟文档 |
 | 9 | 文件内分章 | 接口/数据结构 v1 就按 **hunk** 粒度定死，v1 的 planner 只产整文件分配 |
 | 10 | 状态存储 | 全部在**仓库外** `~/.local/state/unfold/<repo-id>/<review-id>/` |
-| 11 | 许可证落实 | `package.json` 写 `"license": "AGPL-3.0-only"`，README 加 License 节（**第一个 commit 就做**） |
+| 11 | AI 边界 | base 推导与章节规划是 **AI 实现 + TS 约束**；`replay` / `verify` **纯 TS**，不许 AI 介入 |
+| 12 | 许可证落实 | `package.json` 写 `"license": "AGPL-3.0-only"`，README 加 License 节（**第一个 commit 就做**） |
 
 ## 2. 包与边界
 
@@ -56,6 +57,9 @@ packages/core/            纯 TS，零 vscode import，自带 bin/unfold.ts（�
              tmux.ts       tmux send-keys
              file.ts       写文件兜底
   tour/      codetour.ts   章节 → .tours/*.json（CodeTour 格式，可互操作）
+  ai/        schema.ts     结构化输出的单一真源 + 校验器（§7）
+             constrain.ts  codex 走 --output-schema，claude 走 prompt 渲染 + 事后校验
+  prompts/   base-selection.md · chapter-plan.md · findings.md   （markdown，运行时读取）
 
 packages/vscode/          依赖 core，发 Marketplace
   reader/                 章节导航、diff
@@ -73,16 +77,20 @@ packages/vscode/          依赖 core，发 Marketplace
 ```
 1. 触发       agent 报完工（或你手动开）
 2. 快照       snapshot()  → SNAP（commit 对象，含 untracked）
-3. base 推导  显式 → merge-base @{upstream} HEAD → merge-base <默认分支> HEAD → HEAD
-4. 规划       ChapterPlanner(base, SNAP) → plan.json（hunk → chapter）
-5. 重提交     replay() → commit_1..commit_N 于叙事 worktree
-6. 校验       verify(): tree(commit_N) == tree(SNAP)，不等即中止
+3. base 推导  [AI+约束] git 规则给候选集 → AI 挑一个并给理由 → TS 校验
+              （第 2 轮起不问 AI：base = 上一轮的 snapshot）
+4. 规划       [AI+约束] ChapterPlanner(base, SNAP)
+              → plan.json（hunk → chapter + 章标题 + 每章导语）
+5. 重提交     [纯 TS]   replay() → commit_1..commit_N 于叙事 worktree
+6. 校验       [纯 TS]   verify(): tree(commit_N) == tree(SNAP)，不等即中止
 7. 导航就绪   LanguageNavigator.prepare(右侧 worktree)
-8. 阅读/批注  按章读，标 finding，reviewed@blob-hash
+8. 阅读/批注  按章读，标 finding（AI 产的与人标的进同一列表），reviewed@blob-hash
 9. 投递       deliver(session, 一行指针)
 10. 等待      轮询 discover(cwd)，busy → idle
 11. 下一轮    回到 2，只展示增量
 ```
+
+哪一步交给 AI、输出怎么约束、失败怎么降级，见 §7。
 
 ## 4. 脏工作区快照
 
@@ -230,9 +238,57 @@ commit_k = commit-tree tree_k -p commit_{k-1} -m "<章标题>"
 
 **跨再生稳定**：章节分配存 `plan.json`。重新生成时**已分配过的文件保持原章号**，只对新增/消失的文件重新分配，避免 AI 第二次给出不同分组导致批注漂移。
 
-## 7. finding 模型与重看状态
+## 7. AI 边界与提示词工程
 
-### 7.1 存储布局（仓库外）
+### 7.1 边界表
+
+| 步骤 | 谁做 | TS 侧的约束 |
+|---|---|---|
+| base 推导（§3 步骤 3） | **AI 挑 + TS 约束**。git 规则只给**候选集**，AI 读 commit message / 作者 / 时间，挑出「这一轮 agent 是从哪开始干的」并给理由 | 必须是 `HEAD` 的祖先、必须存在、diff 非空。**第 2 轮起不问 AI**——base 就是上一轮的 snapshot，确定性的 |
+| 章节规划（步骤 4） | **AI 实现**：hunk → chapter 分配 + 章标题 + 每章「为什么先看这个」 | 见 §7.3 |
+| 重提交 `replay`（步骤 5） | **纯 TS，不许 AI 介入** | —— |
+| 校验 `verify`（步骤 6） | **纯 TS** | —— |
+| findings（步骤 8） | **AI + 人**，产出进同一个列表由人 triage | schema 校验；anchor 必须能解析到真实位置 |
+
+**为什么 `replay` 必须是 TS**：AI 一旦参与生成中间内容，§6.2 的「构造不可能失败」与 §6.3 的「tree 字节一致恒真」同时失效——`verify` 会从**恒真断言**退化成**可能失败的检查**，整条设计的支点就没了。中间态是从同一份 diff **推导**出来的，不是生成出来的。handoff §5.1 当初选文件级分章，理由原话即「构造确定性、无需 AI 生成中间内容」。
+
+### 7.2 结构化输出层
+
+JSON Schema 定义一次，作为**单一真源**（`core/src/ai/schema.ts`），两条路共用同一个校验器：
+
+- **codex**：直接传 `--output-schema <FILE>`
+- **claude**：没有这个 flag（§9.2 记录的不对称）→ 把同一份 schema 渲染进 prompt 的格式说明，输出后**用同一份 schema 校验**
+
+失败处理链：schema 校验失败 → 带着具体错误重试 N 次 → 仍失败 → **降级到规则 planner**（§9.2 的兜底）。claude 侧只是比 codex 多一次「说服 + 验收」，不是另一套代码路径。
+
+### 7.3 语义校验（schema 管不到，但错了会毁掉跨轮稳定）
+
+- 每个 hunk **恰好**被分配一次，不多不少
+- 章号从 1 连续
+- 引用的 file / hunk id 必须真实存在
+- **跨轮**：上一轮已分配过的文件，章号必须与上一轮一致；不一致就拒绝本次输出、沿用上一轮分配（这是 §6.7 跨轮稳定的执行点）
+
+### 7.4 输入预算
+
+这条最影响可行性：大改动的 diff 可能几万行，不能整个塞进 prompt。给 planner 的是**结构摘要**而非全文：
+
+```
+文件列表 + 每文件的 hunk 数 / 行数
++ tree-sitter 抽出的顶层声明名
++ 每个 hunk 落在哪个声明上
+```
+
+AI 需要看具体内容时再第二轮追问。这份符号表与 §6.5「按顶层声明拆」用的是同一套 tree-sitter 产物——**一份数据两处用，不引入新依赖**。
+
+### 7.5 提示词的存放与可复现
+
+- 提示词放 `packages/core/src/prompts/*.md`，**运行时读取，不内联进 TS**。理由：用户是第一个用户、他会想自己调；markdown 能直接读改、能进 diff 被 review、能做快照测试
+- 三个：`base-selection.md` / `chapter-plan.md` / `findings.md`
+- `plan.json` 除分配结果外，另存 **模型 id + prompt 文件的内容 hash + AI 的原始输出**。出问题时要能分清是 prompt 的锅还是模型的锅；跨轮稳定若起争议，也要有对账依据
+
+## 8. finding 模型与重看状态
+
+### 8.1 存储布局（仓库外）
 
 ```
 ~/.local/state/unfold/<repo-id>/<review-id>/
@@ -252,7 +308,7 @@ commit_k = commit-tree tree_k -p commit_{k-1} -m "<章标题>"
 
 **已知代价（用户已接受）**：findings 跟着机器走、不跟着仓库走——换台机器 review 记录就没了，也没法把批注给别人看。若日后需要，应另设计导出/导入，**不是**改存储位置。
 
-### 7.2 finding
+### 8.2 finding
 
 ```ts
 {
@@ -267,19 +323,19 @@ commit_k = commit-tree tree_k -p commit_{k-1} -m "<章标题>"
 
 `bookmark` 只是 `kind` 的一个取值——JetBrains 式书签不单做一套。
 
-### 7.3 anchor 重定位
+### 8.3 anchor 重定位
 
 agent 改完之后：文件 blob 未变 → anchor 直接有效；变了 → 用 `contentHash` 在新内容里找那几行，找到就挪行号，找不到就标 `stale` 交给人判断。**不猜、不静默丢。**
 
-### 7.4 增量重看
+### 8.4 增量重看
 
 - **reviewed@blob-hash（文件级）**：记「在 blob X 上看过此文件」。下一轮该文件 blob 变了则 stale，且展示 `diff(X, 新blob)`——**只给增量**。这正是强于 GitHub "Viewed" 的地方（后者文件一变整个重置）
 - **「针对这条 finding 的改动」**：每轮记 snapshot sha，下一轮对每条 finding 展示 `diff(snapshot_{n-1}, snapshot_n)` 限定到其锚定文件。人只判「修没修对」
 - status 自动 `open` → `needs-recheck`；确认/驳回是人的动作。**AI 不做 accept/reject、不做修复**（handoff §5.3）
 
-## 8. AgentProvider 与 deliver
+## 9. AgentProvider 与 deliver
 
-### 8.1 两种 session 关系
+### 9.1 两种 session 关系
 
 设计的骨架是把它们分开：**Unfold 自己拥有的 session**（排章节、产 findings）与**别人的 session**（那个刚报完工的 agent，只需发现 + 投递）。
 
@@ -298,7 +354,7 @@ interface AgentProvider {
 }
 ```
 
-### 8.2 ask
+### 9.2 ask
 
 只有两个调用点，即 handoff §5.3 的两件事：`ChapterPlanner` 的 AI 实现、findings 生成。
 
@@ -307,11 +363,11 @@ interface AgentProvider {
 - claude：`claude -p <prompt> --output-format json` → `{session_id, result, is_error, num_turns}`
 - codex：`codex exec --json --output-schema <FILE>`
 
-**不对称要记住**：codex 有 JSON Schema 约束输出，**claude 没有** → claude 侧只能靠 prompt 约束 + 解析容错。
+**不对称要记住**：codex 有 JSON Schema 约束输出，**claude 没有** → claude 侧只能靠 prompt 约束 + 解析容错。两条路如何共用一份 schema 与校验器，见 §7.2。
 
-### 8.3 deliver：往终端投递
+### 9.3 deliver：往终端投递
 
-这是 orca 的做法（见 §10 证据）。三条路共用一段逻辑——**pid 祖先匹配**：
+这是 orca 的做法（见 §11 证据）。三条路共用一段逻辑——**pid 祖先匹配**：
 
 ```
 discover() 给出 agent 进程 pid
@@ -335,11 +391,11 @@ discover() 给出 agent 进程 pid
 
 「改完不要 commit」是必要的：§4 的快照机制要的就是脏工作区，agent 自己 commit 会把 base 推移。
 
-### 8.4 闭环回来
+### 9.4 闭环回来
 
 deliver 后轮询 `discover(cwd)`，目标 session 由 `busy` 回到 `idle` 即重新快照、开新一轮、只展示增量。这是 v1 唯一的自动化触发点。
 
-## 9. 测试策略
+## 10. 测试策略
 
 `core` 零网络、零 `vscode` import，主体是单测 + 真实临时 git 仓库 fixture。按 `superpowers:test-driven-development`，先测后码。
 
@@ -361,12 +417,12 @@ deliver 后轮询 `discover(cwd)`，目标 session 由 `busy` 回到 `idle` 即�
 
 **deliver**：`resolveOwningPane` 纯逻辑，注入伪造进程树单测；`sendText` / `tmux send-keys` 是接口，测试用 fake。真实终端投递靠 `@vscode/test-electron` 跑一两个集成用例，不追覆盖。
 
-## 10. 实测证据附录
+## 11. 实测证据附录
 
 > 用户的标准：预测不算数，文档 / 源码 / 日志才算。以下全部为 2026-09-15 在本机实测或读源码所得，后续 session 不必重新推导。
 > 环境：`claude` 2.1.272 · `codex-cli` 0.153.4 · git 2.34.1 · VS Code Stable `645f29cc31` · WSL2
 
-### 10.1 Claude Code CLI
+### 11.1 Claude Code CLI
 
 - `claude agents --json [--cwd <path>]` 列出活着的 session。
   - interactive：`{pid, cwd, kind, startedAt, sessionId, name, status}`，`status` ∈ `busy`/`idle`
@@ -383,13 +439,13 @@ deliver 后轮询 `discover(cwd)`，目标 session 由 `busy` 回到 `idle` 即�
 - **resume 一个活着的 idle interactive session 不被拒绝，但会静默分叉 transcript**。实测父链：带外那轮 `user uuid=1cbdd59a parent=178a52d4`，终端接着说的那轮 `user uuid=2e30f9ed parent=178a52d4`——**同一个 parent**；随后问终端里的 agent「这段对话你回答过哪几个词」，它答「只有一个」，完全不知道带外那轮存在。**这是本设计放弃 resume 路线的直接原因。**
 - **没落过盘的 session `--resume` 找不到**（`No conversation found with session ID: ...`），哪怕 `claude agents --json` 列着它。对 deliver 无害，但若日后想让 `ask` 复用已有 session 会撞上
 
-### 10.2 Codex CLI
+### 11.2 Codex CLI
 
 - `codex agents` 走 shared local app-server daemon；磁盘另有 `~/.codex/session_index.jsonl`
 - `codex queue --thread <uuid|name> --message <text>` —— **公开的**「向已有 session 投递」命令（claude 侧没有对应物）
 - `codex exec --json` / `--output-schema <FILE>` / `codex exec resume <id>` / `codex fork`
 
-### 10.3 orca 如何做到「发送注释至某个 session 且不分叉」
+### 11.3 orca 如何做到「发送注释至某个 session 且不分叉」
 
 读 `Orca.exe` 的 `resources/app.asar`（Electron 打包，字符串可直接检索）：
 
@@ -403,7 +459,7 @@ deliver 后轮询 `discover(cwd)`，目标 session 由 `busy` 回到 `idle` 即�
 
 **结论**：orca 是把文字以 bracketed paste 写进那个 agent 所在终端的 PTY，等同于人手动粘贴 + 回车。进程同一个、会话同一个，所以不分叉。它能这么做是因为**它自己就是终端宿主**。
 
-### 10.4 VS Code 稳定 API（`vscode.d.ts`，Stable 645f29cc31）
+### 11.4 VS Code 稳定 API（`vscode.d.ts`，Stable 645f29cc31）
 
 | 能力 | 位置 |
 |---|---|
@@ -419,7 +475,7 @@ git 内置扩展对外 API 有 `toGitUri(uri, ref)`（`extensions/git/dist/main.
 
 **`Terminal.processId` + `claude agents --json` 的 pid** 组合，使 Unfold 能靠 pid 祖先匹配认出「哪个 VS Code 终端里跑的是哪个 Claude session」，**无需刮终端输出**（orca 因为要支持任意 agent 才去做进程识别）。
 
-### 10.5 Kotlin LSP（`jetbrains.kotlin-server@0.0.12-linux-x64`）
+### 11.5 Kotlin LSP（`jetbrains.kotlin-server@0.0.12-linux-x64`）
 
 - `activationEvents`：`onLanguage:kotlin`、`workspaceContains:{build.gradle,build.gradle.kts,pom.xml,settings.gradle,settings.gradle.kts}`（含 `*/` 前缀变体）
 - 关键设置：
@@ -427,7 +483,7 @@ git 内置扩展对外 API 有 `toGitUri(uri, ref)`（`extensions/git/dist/main.
   - `intellij.buildTool`（`null` 自动检测，`""` 禁用导入）、`intellij.jdkForSymbolResolution`
 - 命令：`jetbrains.kotlin.reloadWorkspace`、`jetbrains.kotlin.restartLsp`、`jetbrains.kotlin.clearCachesAndRestartLsp`、`jetbrains.exportWorkspaceToJson`
 
-### 10.6 tree-sitter 语法包
+### 11.6 tree-sitter 语法包
 
 `web-tree-sitter@0.27.0`（WASM，扩展宿主内可用，无需原生编译）。
 
@@ -436,19 +492,19 @@ git 内置扩展对外 API 有 `toGitUri(uri, ref)`（`extensions/git/dist/main.
 | `tree-sitter-typescript` | 0.23.2 | 有 | 有（`tree-sitter-typescript.wasm`、`tree-sitter-tsx.wasm`） |
 | `tree-sitter-kotlin` | 0.3.8 | **无**（仅 `highlights.scm`） | **无** |
 
-### 10.7 git 快照
+### 11.7 git 快照
 
 - `git stash create` 只抓 tracked 改动；`-u` 被接受但**静默失效**（生成的 commit 只有 2 个 parent、无 `^3`，tree 里没有 untracked 文件）
 - 临时 index 配方（§4）实测通过：抓到 untracked、排除 gitignored、worktree/index/stash 栈零触碰
 - 临时 index 放 worktree 内会被自己 `add -A` 抓进 tree（实测踩到）
 
-### 10.8 npm 上的现成件
+### 11.8 npm 上的现成件
 
 `@anthropic-ai/claude-agent-sdk@0.3.272` · `@openai/codex-sdk@0.154.0` · `@agentclientprotocol/sdk@1.4.0`（ACP）· `@zed-industries/claude-code-acp@0.16.2`
 
 **ACP 未选用的理由**：它是「编辑器拉起 agent」的协议，**没有「发现一个已经在跑的 session」原语**，而那恰是 v1 闭环的出口。选 `AgentProvider` 自定接口后，ACP 以后可作为第三个 adapter 实现，不冲突。
 
-## 11. 明确不做（v1）
+## 12. 明确不做（v1）
 
 - git log / graph（GitLens + 内置 Source Control Graph 够了）
 - 代码补全
@@ -456,7 +512,7 @@ git 内置扩展对外 API 有 `toGitUri(uri, ref)`（`extensions/git/dist/main.
 - **不用 webview 做 diff**——真实编辑器 + decorations，这是导航免费的前提
 - AI 做 accept / reject 或自动修复
 
-## 12. 待验证清单（实现时先验）
+## 13. 待验证清单（实现时先验）
 
 1. `intellij.projects` 的 `type: "json"` + `jetbrains.exportWorkspaceToJson` 能否让 review worktree 跳过 Gradle sync
 2. `terminal.sendText` 向 claude TUI 投递的实际行为（无 bracketed paste 时多行的表现、以及一行指针是否稳定触发）
