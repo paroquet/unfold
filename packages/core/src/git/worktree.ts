@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { git } from './exec.js'
+import { git, GitError } from './exec.js'
 
 /** 在 path 处开一个 detached worktree，检出 commit。 */
 export async function addWorktree(
@@ -9,7 +9,18 @@ export async function addWorktree(
   commit: string,
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
-  await git(repo, ['worktree', 'add', '-q', '--detach', path, commit])
+  try {
+    await git(repo, ['worktree', 'add', '-q', '--detach', path, commit])
+  } catch (err) {
+    if (err instanceof GitError && /already exists/.test(err.stderr)) {
+      throw new Error(
+        `worktree 目标路径已存在：${path}。这通常意味着同一个 reviewId 被重复用了` +
+          `（例如同一秒内重跑 narrate 撞了车），或者该路径被手工占用——请换一个路径，` +
+          `或先清掉旧的 worktree（git worktree remove）。原始错误：${err.stderr.trim()}`,
+      )
+    }
+    throw err
+  }
 }
 
 /**

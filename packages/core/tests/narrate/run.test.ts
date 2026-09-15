@@ -6,9 +6,19 @@ import { narrate } from '../../src/narrate/run.js'
 import { newReviewId } from '../../src/state/paths.js'
 
 describe('newReviewId', () => {
-  it('由分支 slug 与时间戳组成', () => {
-    const id = newReviewId('feat/charybdis', new Date(Date.UTC(2026, 8, 15, 6, 7, 8)))
-    expect(id).toMatch(/^feat-charybdis-20260915-\d{6}$/)
+  it('由分支 slug、时间戳、毫秒与随机后缀组成', () => {
+    const id = newReviewId('feat/charybdis', new Date(Date.UTC(2026, 8, 15, 6, 7, 8, 42)))
+    expect(id).toMatch(/^feat-charybdis-20260915-\d{6}-042-[0-9a-f]{6}$/)
+  })
+
+  it('同一秒（甚至同一 Date 实例）内重复调用也不会撞出同一个 id（C1 回归）', () => {
+    // reviewId 直接决定 refs/unfold/<reviewId>/round-NNN 这个 ref 名字；
+    // 只精确到秒的话，同秒内重跑 narrate 会撞上同一个 reviewId，第二次跑
+    // 覆盖第一轮钉住的快照 ref，第一轮快照就此失去唯一可达 ref，
+    // 下次 gc 即被清除（spec §4.3 的可达性保证被打破）。
+    const now = new Date(Date.UTC(2026, 8, 15, 6, 7, 8))
+    const ids = new Set(Array.from({ length: 20 }, () => newReviewId('feat/charybdis', now)))
+    expect(ids.size).toBe(20)
   })
 })
 

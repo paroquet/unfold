@@ -87,4 +87,21 @@ describe('worktree', () => {
     await fsRm(wtParent, { recursive: true, force: true })
     await repo.cleanup()
   })
+
+  it('目标路径已存在时，抛出人话错误而不是裸 git fatal 输出（C1 回归）', async () => {
+    const repo = await createTempRepo()
+    await repo.write('a.ts', 'a\n')
+    const head = await repo.commit('base')
+
+    const wtParent = await mkdtemp(join(tmpdir(), 'unfold-wt-collide-'))
+    const wtDir = join(wtParent, 'work')
+    await addWorktree(repo.dir, wtDir, head)
+
+    // 同一路径再开一次，模拟 reviewId 撞车
+    await expect(addWorktree(repo.dir, wtDir, head)).rejects.toThrow(/worktree 目标路径已存在/)
+
+    await removeWorktree(repo.dir, wtDir)
+    await fsRm(wtParent, { recursive: true, force: true })
+    await repo.cleanup()
+  })
 })
