@@ -44,7 +44,7 @@ export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): Cod
 
     for (const path of chapter.filePaths) {
       if (seen.has(path)) continue
-      steps.push({ file: path, line: 1, description: `其余 — ${path}` })
+      steps.push({ file: path, line: 1, description: `${chapter.title} — ${path}` })
     }
 
     return {
