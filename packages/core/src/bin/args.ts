@@ -12,6 +12,8 @@ export interface ParsedArgs {
   open?: true
   /** 与某一次历史 plan 并排比较章节划分；'latest' 表示最近一次 */
   compare?: string
+  /** `--rules <file>`：临时覆盖仓库内与内置的叙事规则 */
+  rulesPath?: string
 }
 
 export type ParseResult = { ok: true; args: ParsedArgs } | { ok: false }
@@ -25,7 +27,7 @@ function isFlagValue(value: string | undefined): value is string {
  * 纯函数：解析 `unfold` 的命令行参数，不做任何 I/O 或 process.exit。
  * 唯一支持的命令是 `narrate`。
  *
- * 取值 flag：`--base`、`--default-branch`、`--repo`、`--compare`
+ * 取值 flag：`--base`、`--default-branch`、`--repo`、`--compare`、`--rules`
  * 布尔 flag：`--dry-run`、`--reuse`、`--clean`、`--open`
  *
  * 每个取值 flag 的值都必须真的是一个值，而不是紧跟着的下一个 flag——
@@ -40,6 +42,7 @@ export function parseArgs(argv: string[], cwd: string): ParseResult {
   let explicit: string | undefined
   let defaultBranch: string | undefined
   let compare: string | undefined
+  let rulesPath: string | undefined
   let dryRun = false
   let reuse = false
   let clean = false
@@ -64,6 +67,10 @@ export function parseArgs(argv: string[], cwd: string): ParseResult {
       if (!isFlagValue(value)) return { ok: false }
       compare = value
       i += 1
+    } else if (flag === '--rules') {
+      if (!isFlagValue(value)) return { ok: false }
+      rulesPath = value
+      i += 1
     } else if (flag === '--dry-run') {
       dryRun = true
     } else if (flag === '--reuse') {
@@ -84,6 +91,7 @@ export function parseArgs(argv: string[], cwd: string): ParseResult {
       ...(explicit !== undefined ? { explicit } : {}),
       ...(defaultBranch !== undefined ? { defaultBranch } : {}),
       ...(compare !== undefined ? { compare } : {}),
+      ...(rulesPath !== undefined ? { rulesPath } : {}),
       ...(dryRun ? { dryRun: true as const } : {}),
       ...(reuse ? { reuse: true as const } : {}),
       ...(clean ? { clean: true as const } : {}),

@@ -99,6 +99,15 @@ describe('parseArgs', () => {
     })
   })
 
+  it('--rules <file>：指定叙事规则配置', () => {
+    const result = parseArgs(['narrate', '--rules', './my-rules.json'], CWD)
+    expect(result).toEqual({ ok: true, args: { repo: CWD, rulesPath: './my-rules.json' } })
+  })
+
+  it('--rules 后面紧跟另一个 flag：判为 usage 错误', () => {
+    expect(parseArgs(['narrate', '--rules', '--open'], CWD)).toEqual({ ok: false })
+  })
+
   it('命令不是 narrate', () => {
     const result = parseArgs(['status'], CWD)
     expect(result).toEqual({ ok: false })
