@@ -80,6 +80,38 @@ unfold narrate --repo <path> --reuse --compare latest
 | 只看分章，不留任何产物 | `--dry-run` |
 | 路径稳定，VS Code 窗口不用重开 | `--reuse`（复用同一个 review 目录，轮次递增） |
 | 清掉堆积的 review 目录与快照 ref | `--clean` |
+| 换一套叙事策略 | `--rules <file>`，或把配置提交到 `<repo>/.unfold/narrative.json` |
+
+## 换一套叙事策略
+
+默认的四层（契约 → 核心逻辑 → 接线与调用方 → 测试与文档）只是内置默认。
+在仓库根放一份 `.unfold/narrative.json` 就能换成任意分层——比如按架构：
+
+```json
+{
+  "version": 1,
+  "fallback": "app",
+  "layers": [
+    { "key": "migration", "title": "数据库迁移", "intro": "先看迁移：它决定了数据形状，改不回去。",
+      "match": ["migrations/**", "**/*.sql"] },
+    { "key": "data", "title": "数据访问", "intro": "再看数据访问层。", "match": ["src/db/**"] },
+    { "key": "app",  "title": "应用逻辑", "intro": "然后看应用逻辑。" },
+    { "key": "api",  "title": "对外接口", "intro": "最后看对外接口——它是别人真正依赖的东西。",
+      "match": ["src/api/**"] }
+  ]
+}
+```
+
+数组顺序就是读的顺序。`--rules <file>` 可以临时覆盖它，调参时不必动仓库。
+
+**两个坑**（都不会报错，只会静默匹配不到）：
+
+- glob 里 `?` 是「恰好一个字符」，所以 `tests?` 不是「test 或 tests」——要写 `test{,s}`
+- picomatch 对写坏的 pattern 不抛错。发现办法是 `--dry-run` 看每章的文件数，某层是 0 就是没匹配上
+
+改了 `match` / `priority` / `fallback` / 层顺序会让**规则指纹**变化，下一轮不再沿用上一轮的
+章节归属（会打印一行提示）。只改 `title` / `intro` 指纹不变——纯文案不该让你已有的批注失效。
+
 
 `--reuse` 会让历轮快照各自保留自己的 ref（`round-001`、`round-002`……），
 不会互相覆盖——这样任何一轮的快照都还能被找回来。
