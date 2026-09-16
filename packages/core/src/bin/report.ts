@@ -57,6 +57,22 @@ export function reviewCommands(input: ReviewCommandsInput): string[] {
 }
 
 /**
+ * 规则指纹变了时的提示（spec §5.6）。
+ *
+ * 有了章节册之后，**规则变化不再自动重排**——指纹的用途从「要不要沿用」
+ * 降级成「要不要提示」。所以这行既要说清变化（旧指纹 → 新指纹），也要指出
+ * 真正能重排的那条路。此前它写的是「本轮重新划分章节，不沿用上一轮的归属」，
+ * 与 updateRegistry 的实际行为**正好相反**：册照沿用不误。
+ */
+export function formatRulesChanged(previous: string | null, current: string): string[] {
+  const from = previous ?? '（上一轮的 plan 读不到）'
+  return [
+    `规则已变更（指纹 ${from} → ${current}）。要按新规则重排章节请跑 --reset-chapters。`,
+    '',
+  ]
+}
+
+/**
  * dry-run 的输出：逐章列出标题、文件数、hunk 数与具体文件。
  *
  * 空章（本轮无改动）与删除章（模块已删除）也列出来——它们仍在册里占着位置，

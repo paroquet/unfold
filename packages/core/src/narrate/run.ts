@@ -61,6 +61,11 @@ export interface NarrateChanges {
   rulesFingerprint: string
   /** 规则相对上一轮是否变了；没有上一轮时为 false */
   rulesChanged: boolean
+  /**
+   * 上一轮所用规则的指纹；没有上一轮（或上一轮的 plan 读不到）时为 null。
+   * 规则变了要打印「a1b2c3 → d4e5f6」，两头都得说得出来才叫证据。
+   */
+  previousRulesFingerprint: string | null
   reviewId: string
   reviewRoot: string
   branch: string
@@ -517,6 +522,7 @@ export async function narrate(
     rulesFingerprint: plan.rulesFingerprint,
     rulesChanged:
       previousPlan !== null && previousPlan.rulesFingerprint !== plan.rulesFingerprint,
+    previousRulesFingerprint: previousPlan?.rulesFingerprint ?? null,
     reviewId,
     reviewRoot: root,
     branch: narrativeBranch,

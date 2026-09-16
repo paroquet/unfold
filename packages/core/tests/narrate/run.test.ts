@@ -399,6 +399,38 @@ describe('narrate 端到端', () => {
     await repo.cleanup()
   })
 
+  it('规则变了时，上一轮的指纹也带出来——只说新指纹没法让人看出变化', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/a.ts', 'export const a = 1\n')
+    await repo.commit('base')
+    await repo.write('src/a.ts', 'export const a = 2\n')
+
+    const first = await narrate(repo.dir, {})
+    if (!first.hasChanges) throw new Error('应该有改动')
+    expect(first.rulesChanged).toBe(false)
+    expect(first.previousRulesFingerprint).toBeNull()
+
+    // 规则文件放在仓库外，免得它自己变成本轮的一个改动
+    const { mkdtemp, writeFile: writeFileTo } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const rulesDir = await mkdtemp(join(tmpdir(), 'unfold-rules-'))
+    const rulesPath = join(rulesDir, 'narrative.json')
+    await writeFileTo(rulesPath, JSON.stringify({ version: 2, maxFiles: 3 }), 'utf8')
+
+    await repo.write('src/b.ts', 'export const b = 1\n')
+    const second = await narrate(repo.dir, { reuse: true, rulesPath })
+    if (!second.hasChanges) throw new Error('应该有改动')
+
+    expect(second.rulesChanged).toBe(true)
+    expect(second.previousRulesFingerprint).toBe(first.rulesFingerprint)
+    expect(second.previousRulesFingerprint).not.toBe(second.rulesFingerprint)
+
+    await rm(rulesDir, { recursive: true, force: true })
+    const { cleanReviews } = await import('../../src/state/cleanup.js')
+    await cleanReviews(repo.dir)
+    await repo.cleanup()
+  })
+
   it('--dry-run --reuse 预览的是现有册上的下一轮，不是从零重来', async () => {
     const repo = await createTempRepo()
     await repo.write('src/b.ts', 'export const b = 1\n')

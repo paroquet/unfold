@@ -10,6 +10,7 @@ import {
   formatDepEvidence,
   formatPlanDiff,
   formatPlanSummary,
+  formatRulesChanged,
   formatWarnings,
   reviewCommands,
   suggestOrder,
@@ -124,10 +125,7 @@ async function main(argv: string[]): Promise<void> {
   const plan = await readPlan(repo, result.reviewId)
 
   if (result.rulesChanged) {
-    out([
-      `规则已变更（指纹 ${result.rulesFingerprint}），本轮重新划分章节，不沿用上一轮的归属。`,
-      '',
-    ])
+    out(formatRulesChanged(result.previousRulesFingerprint, result.rulesFingerprint))
   }
 
   const warnLines = formatWarnings(result.warnings)

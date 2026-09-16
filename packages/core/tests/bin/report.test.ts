@@ -4,6 +4,7 @@ import {
   formatDepEvidence,
   formatPlanDiff,
   formatPlanSummary,
+  formatRulesChanged,
   formatWarnings,
   reviewCommands,
   suggestOrder,
@@ -156,6 +157,26 @@ describe('formatPlanSummary', () => {
     expect(out.some((l) => l.includes('契约') && l.includes('本轮无改动'))).toBe(true)
     expect(out.some((l) => l.includes('老模块') && l.includes('模块已删除'))).toBe(true)
     expect(out.some((l) => l.includes('src/types.ts'))).toBe(false)
+  })
+})
+
+describe('formatRulesChanged', () => {
+  it('同时说出旧指纹、新指纹，并指出重排要跑 --reset-chapters（spec §5.6）', () => {
+    const text = formatRulesChanged('a1b2c3', 'd4e5f6').join('\n')
+    expect(text).toContain('a1b2c3 → d4e5f6')
+    expect(text).toContain('--reset-chapters')
+  })
+
+  it('不再宣称「本轮重新划分章节、不沿用上一轮」——册照沿用，那句话是反的', () => {
+    const text = formatRulesChanged('a1b2c3', 'd4e5f6').join('\n')
+    expect(text).not.toContain('不沿用')
+    expect(text).not.toContain('重新划分章节')
+  })
+
+  it('上一轮的 plan 读不到时明说读不到，而不是打印一个空指纹', () => {
+    const text = formatRulesChanged(null, 'd4e5f6').join('\n')
+    expect(text).toContain('读不到')
+    expect(text).toContain('→ d4e5f6')
   })
 })
 
