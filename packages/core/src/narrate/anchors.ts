@@ -22,6 +22,13 @@ export interface Annotation {
 
 export interface AnnotationFile {
   version: 1
+  /**
+   * 这些行号是相对**哪个快照**的。迁移锚点必须用 `diff(该快照, 本轮快照)`，
+   * 不能用 `diff(base, 本轮快照)`——后者会把上一轮已经施加过的偏移再施加一遍，
+   * 每轮累积，锚点一轮一轮漂离它标注的代码，而且不会有任何报错。
+   * 缺省（旧产物或空表）表示无需迁移。
+   */
+  snapshot?: string
   annotations: Annotation[]
 }
 
@@ -117,12 +124,21 @@ export function pinnedByAnnotations(
 
 /** 读批注。文件不存在表示还没有任何批注，返回空表而不是报错。 */
 export async function readAnnotations(reviewRoot: string): Promise<AnnotationFile> {
+  const path = join(reviewRoot, ANNOTATIONS_FILE)
+  let text: string
   try {
-    const text = await readFile(join(reviewRoot, ANNOTATIONS_FILE), 'utf8')
-    return JSON.parse(text) as AnnotationFile
+    text = await readFile(path, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, annotations: [] }
     throw err
+  }
+  try {
+    return JSON.parse(text) as AnnotationFile
+  } catch (err) {
+    // JSON.parse 抛的 SyntaxError 没有 .code，不会撞上面的 ENOENT 判断，
+    // 但原样冒出去只说"不是合法 JSON"，不说是哪个文件——排查时得先反查
+    // 调用栈才知道是哪个 review 的批注坏了。带上路径再抛。
+    throw new Error(`批注文件不是合法 JSON：${path}（${(err as Error).message}）`)
   }
 }
 

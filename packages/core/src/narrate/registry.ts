@@ -137,12 +137,21 @@ export function updateRegistry(input: UpdateInput): Registry {
 
 /** 读册。文件不存在表示这是第一轮，返回空册而不是报错。 */
 export async function readRegistry(reviewRoot: string): Promise<Registry> {
+  const path = join(reviewRoot, REGISTRY_FILE)
+  let text: string
   try {
-    const text = await readFile(join(reviewRoot, REGISTRY_FILE), 'utf8')
-    return JSON.parse(text) as Registry
+    text = await readFile(path, 'utf8')
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return EMPTY_REGISTRY
     throw err
+  }
+  try {
+    return JSON.parse(text) as Registry
+  } catch (err) {
+    // JSON.parse 抛的 SyntaxError 没有 .code，不会撞上面的 ENOENT 判断，
+    // 但原样冒出去只说"不是合法 JSON"，不说是哪个文件——排查时得先反查
+    // 调用栈才知道是哪个 review 的册坏了。带上路径再抛。
+    throw new Error(`章节册不是合法 JSON：${path}（${(err as Error).message}）`)
   }
 }
 

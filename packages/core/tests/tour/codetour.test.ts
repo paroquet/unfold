@@ -64,7 +64,7 @@ describe('toCodeTours', () => {
     expect(tours[1]!.steps[0]!.description).toBe('第 2 章 — img2.bin')
   })
 
-  it('已删除的文件不产生 step（D2 回归）：叙事 worktree 停在终态，该文件已不存在', () => {
+  it('全部内容都是被删除的文件时不生成空壳 tour（M1 回归）：该章虽有 commitIndex，但被删除的文件不产生 step，剩不下任何 step 就不该有 tour', () => {
     const deleted: FileChange = {
       path: 'src/gone.ts', kind: 'delete', binary: false, mode: '', blob: null,
       oldMode: '100644', oldBlob: 'a'.repeat(40),
@@ -84,7 +84,7 @@ describe('toCodeTours', () => {
       ],
     }
     const tours = toCodeTours(p, [deleted, deletedBinary], 'unfold/rev-1')
-    expect(tours[0]!.steps).toEqual([])
+    expect(tours).toHaveLength(0)
   })
 
   it('同章里删除文件与正常修改的文件混在一起，只有正常文件产生 step', () => {

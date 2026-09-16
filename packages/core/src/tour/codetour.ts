@@ -33,7 +33,10 @@ export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): Cod
   const byPath = new Map(changes.map((c) => [c.path, c]))
 
   return plan.chapters
-    // 空章与删除章没有对应的 commit，生成 tour 只会在 CodeTour 面板里留一排空壳
+    // 先按 commitIndex 剔掉没有对应 commit 的空章/删除章——它们连标题里的
+    // 章号都没有。再按实际产出的 step 数筛一遍：一个章可能真有 commitIndex，
+    // 但如果全部内容都是被删除的文件（下面的 step 收集会把它们统统丢掉），
+    // 剩下的仍是一个 "steps": [] 的空壳，同样不该生成 tour。
     .filter((chapter) => chapter.commitIndex !== null)
     .map((chapter) => {
       const steps: CodeTourStep[] = []
@@ -68,4 +71,5 @@ export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): Cod
         steps,
       }
     })
+    .filter((tour) => tour.steps.length > 0)
 }

@@ -234,7 +234,7 @@ describe('narrate 端到端', () => {
     await repo.cleanup()
   })
 
-  it('实现与它的测试落在同一章，且按依赖序排在被依赖者之后', async () => {
+  it('实现与它的测试落在同一章', async () => {
     const repo = await createTempRepo()
     await repo.write('src/a.ts', 'export const a = 1\n')
     await repo.commit('base')
@@ -298,6 +298,52 @@ describe('narrate 端到端', () => {
     const held = await readAnnotations(first.reviewRoot)
     expect(held.annotations[0]?.state).toBe('unanchored')
     expect(held.annotations[0]?.body).toBe('看这里')
+    expect(held.annotations[0]?.chapterKey).toBeNull()
+    await repo.cleanup()
+  })
+
+  it('第二轮没有新改动时，批注锚点不动——不能每轮重复施加同一批偏移', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/a.ts', Array.from({ length: 20 }, (_, i) => `const l${i} = ${i}`).join('\n') + '\n')
+    await repo.commit('base')
+    // 在开头插 3 行：这会在 base→快照 的 diff 里留下一个纯插入 hunk
+    await repo.write('src/a.ts', 'const x = 0\nconst y = 0\nconst z = 0\n' +
+      Array.from({ length: 20 }, (_, i) => `const l${i} = ${i}`).join('\n') + '\n')
+
+    const first = await narrate(repo.dir, {})
+    if (!first.hasChanges) throw new Error('应该有改动')
+    const held = await readAnnotations(first.reviewRoot)
+    await writeAnnotations(first.reviewRoot, {
+      ...held,
+      annotations: [{
+        id: 'n1', chapterKey: 'src/a.ts', path: 'src/a.ts', startLine: 15, endLine: 15,
+        anchorHash: 'sha256:x', body: '看这里', state: 'live', round: 1,
+      }],
+    })
+
+    // 第二轮：工作区一个字节没动
+    await narrate(repo.dir, { reuse: true })
+    const after = await readAnnotations(first.reviewRoot)
+    expect(after.annotations[0]).toMatchObject({ startLine: 15, endLine: 15, state: 'live' })
+    await repo.cleanup()
+  })
+
+  it('--dry-run --reuse 预览的是现有册上的下一轮，不是从零重来', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/b.ts', 'export const b = 1\n')
+    await repo.commit('base')
+    await repo.write('src/b.ts', 'export const b = 2\n')
+    const first = await narrate(repo.dir, {})
+    if (!first.hasChanges) throw new Error('应该有改动')
+
+    await repo.write('src/a.ts', 'export const a = 1\n')
+    const preview = await planOnly(repo.dir, { reuse: true })
+    if (!preview.hasChanges) throw new Error('应该有改动')
+
+    // 册生效时 b.ts 留在「章 src/b.ts」；从零重来会把它卷进「章 src/a.ts」
+    const keyOf = (path: string): string | undefined =>
+      preview.plan.chapters.find((c) => c.filePaths.includes(path))?.key
+    expect(keyOf('src/b.ts')).toBe('src/b.ts')
     await repo.cleanup()
   })
 })

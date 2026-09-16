@@ -5,7 +5,7 @@ import { git, GitError } from '../git/exec.js'
 import { snapshot, pinSnapshot, nextRound } from '../git/snapshot.js'
 import { resolveBase } from '../git/range.js'
 import { addWorktree, attachWorktree } from '../git/worktree.js'
-import { newReviewId, reviewRoot } from '../state/paths.js'
+import { newReviewId, repoStateDir, reviewRoot } from '../state/paths.js'
 import { latestReview, readPlan } from '../state/reviews.js'
 import { computeChanges } from './diff.js'
 import { canonicalPath } from './pair.js'
@@ -173,9 +173,14 @@ async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
       contents.set(unit, null)
       continue
     }
-    contents.set(unit, await git(repo, ['cat-file', 'blob', `${snap.commit}:${unit}`], {
-      trim: false,
-    }))
+    contents.set(
+      unit,
+      await git(repo, ['cat-file', 'blob', `${snap.commit}:${unit}`], { trim: false })
+        // 子模块指针会被 ls-tree 列出却不是 blob。读不到内容只影响依赖排序，
+        // 不影响字节一致——记为「内容不可读」让它进 skipped，比抛一个
+        // 看不出因果的 GitError 好。
+        .catch(() => null),
+    )
   }
 
   const graph = buildDepGraph(units, contents)
@@ -227,10 +232,7 @@ interface Assembled {
  * 是显式要求换一次，两者不能互相拦。
  */
 async function assemble(
-  // 签名保留 repo：与 prepare() 对齐，且 assemble 未来若要接 AI planner 的
-  // 网络/工具调用大概率要用到它。当前实现全部素材已经在 `p: Prepared` 里，
-  // 故意不用，靠下划线告诉 noUnusedParameters「知道，先留着」。
-  _repo: string,
+  repo: string,
   root: string,
   p: Prepared,
   round: number,
@@ -243,7 +245,14 @@ async function assemble(
   const registryBefore = opts.resetChapters === true ? EMPTY_REGISTRY : await readRegistry(root)
 
   const annotationFile = await readAnnotations(root)
-  const migrated = migrateAnchors(annotationFile.annotations, p.changes)
+  // 锚点存的是上一轮快照的行号。要推到本轮，必须用**两轮快照之间**的 diff；
+  // 拿 base→本轮 的 diff 会把上一轮已施加的偏移重复施加一遍。
+  // 上一轮快照由 refs/unfold/<reviewId>/round-NNN 钉住，gc 不会回收它。
+  const anchorChanges =
+    annotationFile.snapshot === undefined || annotationFile.snapshot === p.snapshotCommit
+      ? []
+      : await computeChanges(repo, annotationFile.snapshot, p.snapshotCommit)
+  const migrated = migrateAnchors(annotationFile.annotations, anchorChanges)
   // reset 必须在 migrateAnchors 之后覆盖：迁移会按本轮 hunk 与批注的重叠情况
   // 把 state 判成 'stale'，而 reset 要的是「解除归属」这一个更强的结论，
   // 顺序反了会让 reset 的批注看起来还跟旧章有关系。
@@ -251,6 +260,8 @@ async function assemble(
     opts.resetChapters === true
       ? migrated.map((a) => ({ ...a, chapterKey: null, state: 'unanchored' as const }))
       : migrated
+  // pinnedByAnnotations 钉的是本轮 plan 里的 hunk id，必须用 base→本轮 的 p.changes——
+  // 与上面迁移锚点用的 diff 不是同一件事，不能共用 anchorChanges。
   const pinned = pinnedByAnnotations(annotations, p.changes)
 
   const planner = opts.planner ?? new RulePlanner(p.segments)
@@ -326,10 +337,12 @@ async function currentBranch(repo: string): Promise<string> {
  * 只算 plan，不产出任何东西：不钉快照 ref、不建 worktree、不 replay、
  * 不写状态目录。用于反复调参时秒级看「章节会怎么分」。
  *
- * dry-run 用一个必然不存在的 review root：`assemble` 内部的 `readRegistry` /
- * `readAnnotations` 对不存在的目录返回空值，预览因此既不读也不可能写到
- * 任何真实 review 状态——不需要单独绕开写入逻辑，因为 `assemble` 本来就
- * 只算不落盘，这里连 root 都是假的。
+ * dry-run 预览的是「真跑一次会发生什么」：带 `--reuse` 时那意味着在**现有**册
+ * 上继续，必须读真实的 review 目录（只读，不写——`assemble` 本身不落盘）；
+ * 不带 `--reuse` 时意味着开一次全新 review，空册本来就是正确的预览。此前用
+ * 带随机后缀的 `newReviewId` 现编一个必然不存在的目录，会让任何跑过一轮以上
+ * 的仓库拿到一份与实际不符的预览（章节从零重新切段，`cross-round-drift` 也
+ * 永远不会在预览里触发）。
  *
  * 注意它仍会在对象库里留下一个未被引用的快照 commit（与干净工作区
  * 早退同源），`git gc --prune=now` 可回收。
@@ -343,8 +356,14 @@ export async function planOnly(
     return { hasChanges: false, branch: p.branch, base: p.base }
   }
 
-  const root = await reviewRoot(repo, newReviewId(p.branch, opts.now))
-  const assembled = await assemble(repo, root, p, 1, opts, null)
+  const previous = opts.reuse === true ? await latestReview(repo) : null
+  const root =
+    previous?.root ?? join(await repoStateDir(repo), newReviewId(p.branch, opts.now))
+  const round = previous === null ? 1 : await nextRound(repo, previous.reviewId)
+  const previousPlan =
+    previous === null ? null : await readPlan(repo, previous.reviewId).catch(() => null)
+
+  const assembled = await assemble(repo, root, p, round, opts, previousPlan)
 
   return {
     hasChanges: true,
@@ -439,7 +458,7 @@ export async function narrate(
   )
   await writeFile(join(root, 'plan.json'), `${JSON.stringify(plan, null, 2)}\n`, 'utf8')
   await writeRegistry(root, registry)
-  await writeAnnotations(root, { version: 1, annotations })
+  await writeAnnotations(root, { version: 1, snapshot: p.snapshotCommit, annotations })
 
   const tours = toCodeTours(plan, changes, narrativeBranch)
   for (const [i, tour] of tours.entries()) {
