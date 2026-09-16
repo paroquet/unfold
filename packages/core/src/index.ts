@@ -9,15 +9,20 @@ export type { FileChange, Hunk, ChangeKind } from './narrate/diff.js'
 export type { Assignment, Chapter, ChapterPlanner, Plan, PlanContext } from './narrate/plan.js'
 export { RulePlanner } from './narrate/rule-planner.js'
 export { buildPlan } from './narrate/build-plan.js'
-export {
-  DEFAULT_RULES,
-  REPO_RULES_PATH,
-  classifyPath,
-  loadRules,
-  rulesFingerprint,
-  validateRules,
-} from './narrate/rules.js'
-export type { LayerRule, NarrativeRules, LoadRulesOptions } from './narrate/rules.js'
+export { DEFAULT_RULES, REPO_RULES_PATH, loadRules, rulesFingerprint, validateRules } from './narrate/rules.js'
+export type { NarrativeRules, LoadRulesOptions } from './narrate/rules.js'
+export { DEFAULT_PAIR_RULES, canonicalCandidates, canonicalPath } from './narrate/pair.js'
+export type { PairRules } from './narrate/pair.js'
+export { SCANNER_VERSION, buildDepGraph, languageOf, scanImports } from './narrate/deps.js'
+export type { DepGraph, SourceLang } from './narrate/deps.js'
+export { topoOrder } from './narrate/order.js'
+export type { OrderResult } from './narrate/order.js'
+export { segment } from './narrate/segment.js'
+export type { Segment, SegmentInput } from './narrate/segment.js'
+export { EMPTY_REGISTRY, REGISTRY_FILE, readRegistry, updateRegistry, writeRegistry } from './narrate/registry.js'
+export type { ChapterRecord, ChapterStatus, Registry, UpdateInput } from './narrate/registry.js'
+export { ANNOTATIONS_FILE, migrateAnchors, pinnedByAnnotations, readAnnotations, writeAnnotations } from './narrate/anchors.js'
+export type { Annotation, AnnotationFile, AnnotationState } from './narrate/anchors.js'
 export { validatePlan } from './narrate/validate.js'
 export type { ValidationIssue, ValidationCode } from './narrate/validate.js'
 export { composeContent } from './narrate/compose.js'
