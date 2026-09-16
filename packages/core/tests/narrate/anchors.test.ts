@@ -37,6 +37,25 @@ describe('migrateAnchors', () => {
     expect(got).toMatchObject({ startLine: 20, endLine: 24, state: 'live' })
   })
 
+  // 以下三条钉住纯插入的边界。git 对「在 L2 与 L3 之间插两行」实测给出
+  // `@@ -2,0 +3,2 @@`——oldStart 指的是插入点**之前**那一行，不是插入后的位置。
+  // 批注是 20-24 时：oldStart=19 在批注之前，=20 已经插进批注内部，=24 在批注之后。
+
+  it('纯插入落在批注之前时，锚点整体下移', () => {
+    const [got] = migrateAnchors([note()], [change('a.ts', [hunk('a.ts#0', 19, 0, 20, 3)])])
+    expect(got).toMatchObject({ startLine: 23, endLine: 27, state: 'live' })
+  })
+
+  it('纯插入落在批注内部时标 stale，而不是把批注整体下移', () => {
+    const [got] = migrateAnchors([note()], [change('a.ts', [hunk('a.ts#0', 20, 0, 21, 3)])])
+    expect(got?.state).toBe('stale')
+  })
+
+  it('纯插入落在批注之后时，锚点不动', () => {
+    const [got] = migrateAnchors([note()], [change('a.ts', [hunk('a.ts#0', 24, 0, 25, 3)])])
+    expect(got).toMatchObject({ startLine: 20, endLine: 24, state: 'live' })
+  })
+
   it('文件被删除时批注标 orphaned，但不丢弃', () => {
     const [got] = migrateAnchors([note()], [change('a.ts', [], 'delete')])
     expect(got).toMatchObject({ state: 'orphaned' })

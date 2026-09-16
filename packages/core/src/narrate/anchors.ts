@@ -48,12 +48,22 @@ export function migrateAnchors(
     const hunks = [...change.hunks].sort((a, b) => a.oldStart - b.oldStart)
     let offset = 0
     for (const h of hunks) {
+      // 纯插入（oldLines === 0）的 oldStart 是**插入点之前那一行**的行号：
+      // 在 L2 与 L3 之间插两行，git 实测给的是 `@@ -2,0 +3,2 @@`。所以它占的
+      // 不是某几行，而是 oldStart 与 oldStart+1 之间的那道缝，判据必须跟着变。
+      //
+      // 用同一套 `oldEnd <= startLine` 会把「插在批注第一行之后」误判成「整段
+      // 都在批注之前」，于是批注被整体下移、却完全没提示——新插进来的代码就这样
+      // 悄悄落进了「已 review」的范围里。这是最坏的一种错：不崩、不报警、结论错。
+      const insertion = h.oldLines === 0
       const oldEnd = h.oldStart + h.oldLines
-      if (oldEnd <= note.startLine) {
+      const before = insertion ? h.oldStart < note.startLine : oldEnd <= note.startLine
+      if (before) {
         offset += h.newLines - h.oldLines
         continue
       }
-      if (h.oldStart <= note.endLine) {
+      const overlaps = insertion ? h.oldStart < note.endLine : h.oldStart <= note.endLine
+      if (overlaps) {
         // 重叠：锚点范围重算成这个 hunk 的新范围
         return {
           ...note,
