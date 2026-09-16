@@ -54,6 +54,18 @@ export function validateRules(raw: unknown): NarrativeRules {
     fail(`version 必须是 2，收到 ${JSON.stringify(root['version'])}`)
   }
 
+  // 拼错的字段若被静默忽略，用户会以为自己在调参、实际跑的是默认值，
+  // 且只能靠 --dry-run 的章节大小间接察觉。宁可在加载期就炸。
+  // `$schema` 放行：编辑器补全常往 JSON 里塞这个键，它不是配置项。
+  const KNOWN_KEYS = new Set(['$schema', 'version', 'maxFiles', 'pair', 'order', 'titles'])
+  const unknown = Object.keys(root).filter((k) => !KNOWN_KEYS.has(k))
+  if (unknown.length > 0) {
+    fail(
+      `有无法识别的字段：${unknown.join('、')}；` +
+        '可用字段：version、maxFiles、pair、order、titles',
+    )
+  }
+
   let maxFiles = DEFAULT_RULES.maxFiles
   if (root['maxFiles'] !== undefined) {
     const value = root['maxFiles']
@@ -92,11 +104,27 @@ export function validateRules(raw: unknown): NarrativeRules {
 
   let titles: NarrativeRules['titles'] = {}
   if (root['titles'] !== undefined) {
-    const value = root['titles']
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    const raw = root['titles']
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       fail('titles 必须是一个对象')
     }
-    titles = value as NarrativeRules['titles']
+    for (const [key, entry] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+        fail(`titles["${key}"] 必须是一个对象`)
+      }
+      const fields = entry as Record<string, unknown>
+      for (const field of ['title', 'intro'] as const) {
+        const value = fields[field]
+        if (value !== undefined && (typeof value !== 'string' || value === '')) {
+          fail(`titles["${key}"].${field} 必须是非空字符串`)
+        }
+      }
+      const extra = Object.keys(fields).filter((k) => k !== 'title' && k !== 'intro')
+      if (extra.length > 0) {
+        fail(`titles["${key}"] 有无法识别的字段：${extra.join('、')}`)
+      }
+    }
+    titles = raw as NarrativeRules['titles']
   }
 
   return { version: 2, maxFiles, pair, order, titles }

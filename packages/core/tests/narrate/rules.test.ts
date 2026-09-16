@@ -27,6 +27,26 @@ describe('validateRules', () => {
   it('order 必须是字符串数组', () => {
     expect(() => validateRules({ version: 2, order: 'src' })).toThrow(/order/)
   })
+
+  it('拼错的字段直接报错，而不是静默回落到默认值', () => {
+    expect(() => validateRules({ version: 2, maxFile: 10 })).toThrow(/无法识别的字段：maxFile/)
+  })
+
+  it('放行 $schema——编辑器补全会往 JSON 里塞它，它不是配置项', () => {
+    expect(() => validateRules({ $schema: './x.json', version: 2 })).not.toThrow()
+  })
+
+  it('titles 的条目值也要校验，不能等到下游消费时才炸', () => {
+    expect(() => validateRules({ version: 2, titles: { 'a.ts': { title: 123 } } }))
+      .toThrow(/titles\["a\.ts"\]\.title/)
+    expect(() => validateRules({ version: 2, titles: { 'a.ts': { heading: 'x' } } }))
+      .toThrow(/无法识别的字段：heading/)
+  })
+
+  it('pair 的形状错了要报错', () => {
+    expect(() => validateRules({ version: 2, pair: { dirs: ['tests'] } })).toThrow(/pair\.dirs/)
+    expect(() => validateRules({ version: 2, pair: { suffixes: [1] } })).toThrow(/pair\.suffixes/)
+  })
 })
 
 describe('rulesFingerprint', () => {
@@ -43,6 +63,13 @@ describe('rulesFingerprint', () => {
   it('改 titles 不换指纹——改文案不该让上一轮的批注失效', () => {
     expect(rulesFingerprint({ ...DEFAULT_RULES, titles: { 'a.ts': { title: '新标题' } } }))
       .toBe(rulesFingerprint(DEFAULT_RULES))
+  })
+
+  it('内置默认规则的指纹是一个固定值——配方本身也要有回归网', () => {
+    // 这条测试刻意"脆"：少算一个字段、多算一个字段、换掉 SCANNER_VERSION，
+    // 它都会红。那正是它的价值——改配方意味着所有历史轮次的指纹从此不可比，
+    // 必须是一次有意识的决定，而不是顺手改掉。改配方时同步更新这个常量即可。
+    expect(rulesFingerprint(DEFAULT_RULES)).toBe('149b90cc464c')
   })
 })
 
