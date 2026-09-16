@@ -21,13 +21,13 @@ describe('toCodeTours', () => {
   it('一章一个 tour，step 指向该章 hunk 的新行号', () => {
     const tours = toCodeTours(plan, [change('src/types.ts', 12), change('src/engine.ts', 40)], 'unfold/rev-1')
     expect(tours.length).toBe(2)
-    expect(tours[0]!.title).toBe('1. 契约')
-    expect(tours[0]!.description).toBe('先看类型。')
-    expect(tours[0]!.ref).toBe('unfold/rev-1')
-    expect(tours[0]!.steps).toEqual([
+    expect(tours[0]!.tour.title).toBe('1. 契约')
+    expect(tours[0]!.tour.description).toBe('先看类型。')
+    expect(tours[0]!.tour.ref).toBe('unfold/rev-1')
+    expect(tours[0]!.tour.steps).toEqual([
       { file: 'src/types.ts', line: 12, description: '契约 — src/types.ts' },
     ])
-    expect(tours[1]!.steps[0]!.line).toBe(40)
+    expect(tours[1]!.tour.steps[0]!.line).toBe(40)
   })
 
   it('无 hunk 的文件（二进制）也产一个指向第 1 行的 step', () => {
@@ -37,7 +37,7 @@ describe('toCodeTours', () => {
     }
     const p: Plan = { ...plan, chapters: [{ key: 'core', index: 1, commitIndex: 1, status: 'active', keyRenamedFrom: null, title: '核心逻辑', intro: 'x', hunkIds: [], filePaths: ['img.bin'] }] }
     const tours = toCodeTours(p, [binary], 'unfold/rev-1')
-    expect(tours[0]!.steps).toEqual([
+    expect(tours[0]!.tour.steps).toEqual([
       { file: 'img.bin', line: 1, description: '核心逻辑 — img.bin' },
     ])
   })
@@ -60,8 +60,8 @@ describe('toCodeTours', () => {
     }
     const tours = toCodeTours(p, [binary1, binary2], 'unfold/rev-1')
     expect(tours.length).toBe(2)
-    expect(tours[0]!.steps[0]!.description).toBe('第 1 章 — img1.bin')
-    expect(tours[1]!.steps[0]!.description).toBe('第 2 章 — img2.bin')
+    expect(tours[0]!.tour.steps[0]!.description).toBe('第 1 章 — img1.bin')
+    expect(tours[1]!.tour.steps[0]!.description).toBe('第 2 章 — img2.bin')
   })
 
   it('全部内容都是被删除的文件时不生成空壳 tour（M1 回归）：该章虽有 commitIndex，但被删除的文件不产生 step，剩不下任何 step 就不该有 tour', () => {
@@ -105,7 +105,7 @@ describe('toCodeTours', () => {
       ],
     }
     const tours = toCodeTours(p, [deleted, modified], 'unfold/rev-1')
-    expect(tours[0]!.steps).toEqual([
+    expect(tours[0]!.tour.steps).toEqual([
       { file: 'src/kept.ts', line: 5, description: '核心逻辑 — src/kept.ts' },
     ])
   })
@@ -122,6 +122,32 @@ describe('toCodeTours', () => {
     }
     const tours = toCodeTours(p, [], 'unfold/x')
     expect(tours).toHaveLength(1)
-    expect(tours[0]?.title).toContain('1.')
+    expect(tours[0]?.tour.title).toContain('1.')
+  })
+
+  it('中间的纯删除章被跳过时，后面的 tour 仍带着自己的 commitIndex', () => {
+    const del: FileChange = {
+      path: 'gone.ts', kind: 'delete', binary: false, mode: '', blob: null,
+      oldMode: '100644', oldBlob: 'o', hunks: [],
+    }
+    const keep: FileChange = {
+      path: 'keep.ts', kind: 'modify', binary: false, mode: '100644', blob: 'b',
+      oldMode: '100644', oldBlob: 'o', hunks: [],
+    }
+    const p: Plan = {
+      version: 1, rulesFingerprint: 'f', base: 'b', snapshot: 's', plannerId: 'test',
+      chapters: [
+        { index: 1, commitIndex: 1, key: 'a.ts', title: 'a', intro: '', status: 'active',
+          keyRenamedFrom: null, hunkIds: [], filePaths: ['keep.ts'] },
+        // 中间这一章只含被删文件：有 commitIndex，但 step 会被清空
+        { index: 2, commitIndex: 2, key: 'gone.ts', title: '删掉的模块', intro: '',
+          status: 'active', keyRenamedFrom: null, hunkIds: [], filePaths: ['gone.ts'] },
+        { index: 3, commitIndex: 3, key: 'c.ts', title: 'c', intro: '', status: 'active',
+          keyRenamedFrom: null, hunkIds: [], filePaths: ['keep.ts'] },
+      ],
+    }
+    const tours = toCodeTours(p, [del, keep], 'unfold/x')
+    expect(tours.map((t) => t.commitIndex)).toEqual([1, 3])
+    expect(tours[1]?.tour.title).toContain('3.')
   })
 })

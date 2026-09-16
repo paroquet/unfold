@@ -460,9 +460,11 @@ export async function narrate(
   await writeRegistry(root, registry)
   await writeAnnotations(root, { version: 1, snapshot: p.snapshotCommit, annotations })
 
-  const tours = toCodeTours(plan, changes, narrativeBranch)
-  for (const [i, tour] of tours.entries()) {
-    const name = `chapter-${String(i + 1).padStart(3, '0')}.tour`
+  // 文件名必须跟着 commitIndex 走，不能跟着数组下标走——纯删除章会让 tour
+  // 数组出现空洞（有 commitIndex 却没有任何 step，见 codetour.ts 的过滤），
+  // 用下标命名会让文件名、tour 标题与 git log 三者对不上。
+  for (const { commitIndex, tour } of toCodeTours(plan, changes, narrativeBranch)) {
+    const name = `chapter-${String(commitIndex).padStart(3, '0')}.tour`
     await writeFile(join(root, 'tours', name), `${JSON.stringify(tour, null, 2)}\n`, 'utf8')
   }
 

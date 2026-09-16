@@ -346,4 +346,38 @@ describe('narrate 端到端', () => {
     expect(keyOf('src/b.ts')).toBe('src/b.ts')
     await repo.cleanup()
   })
+
+  it('中间章为纯删除时，tour 文件名跟着 commitIndex 走，不因数组空洞错位（R27 回归）', async () => {
+    const repo = await createTempRepo()
+    // 三个不同目录、各自成章，保证中间那章（b/y.ts）独立成一个 commit
+    await repo.write('a/x.ts', 'export const x = 1\n')
+    await repo.write('b/y.ts', 'export const y = 1\n')
+    await repo.write('c/z.ts', 'export const z = 1\n')
+    await repo.commit('base')
+
+    await repo.write('a/x.ts', 'export const x = 2\n')
+    await repo.rm('b/y.ts')
+    await repo.write('c/z.ts', 'export const z = 2\n')
+
+    const result = await narrate(repo.dir, {})
+    if (!result.hasChanges) throw new Error('应该有改动')
+    const plan = await readPlan(repo.dir, result.reviewId)
+    const active = plan.chapters.filter((c) => c.commitIndex !== null)
+    expect(active.length).toBe(3)
+
+    const { readdir } = await import('node:fs/promises')
+    const files = (await readdir(join(result.reviewRoot, 'tours'))).sort()
+
+    // 中间那章（b/y.ts，commitIndex 2）全是删除，没有任何 step，tour 被跳过——
+    // 不该出现 chapter-002.tour；c/z.ts 那章必须仍用它自己的 commitIndex(3)
+    // 命名，不能因为前面空出一个位置就被数组下标错位命名成 002
+    expect(files).toEqual(['chapter-001.tour', 'chapter-003.tour'])
+
+    const third = JSON.parse(
+      await readFile(join(result.reviewRoot, 'tours', 'chapter-003.tour'), 'utf8'),
+    ) as { title: string }
+    expect(third.title).toContain('3.')
+
+    await repo.cleanup()
+  })
 })

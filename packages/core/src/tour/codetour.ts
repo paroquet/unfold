@@ -16,6 +16,16 @@ export interface CodeTour {
   steps: CodeTourStep[]
 }
 
+export interface ChapterTour {
+  /**
+   * 该 tour 对应的 commit 序号。**必须由它决定文件名**——tour 数组会因为
+   * 「纯删除章没有任何 step」而出现空洞，用数组下标命名会让文件名、tour 标题
+   * 和 git log 三者对不上，而且只在中间章恰好是纯删除章时才发作。
+   */
+  commitIndex: number
+  tour: CodeTour
+}
+
 const SCHEMA = 'https://aka.ms/codetour-schema'
 
 /**
@@ -29,7 +39,7 @@ const SCHEMA = 'https://aka.ms/codetour-schema'
  * 支持的变体（例如只给 directory），价值不大；被删除文件的改动内容本身
  * 在 diff 里仍然完整可查，只是不适合作为"点开某行"式的导览锚点。
  */
-export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): CodeTour[] {
+export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): ChapterTour[] {
   const byPath = new Map(changes.map((c) => [c.path, c]))
 
   return plan.chapters
@@ -64,12 +74,15 @@ export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): Cod
       }
 
       return {
-        $schema: SCHEMA,
-        title: `${chapter.commitIndex}. ${chapter.title}`,
-        description: chapter.intro,
-        ref,
-        steps,
+        commitIndex: chapter.commitIndex as number,
+        tour: {
+          $schema: SCHEMA,
+          title: `${chapter.commitIndex}. ${chapter.title}`,
+          description: chapter.intro,
+          ref,
+          steps,
+        },
       }
     })
-    .filter((tour) => tour.steps.length > 0)
+    .filter((entry) => entry.tour.steps.length > 0)
 }
