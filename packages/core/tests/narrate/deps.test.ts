@@ -31,6 +31,14 @@ describe('scanImports', () => {
     expect(scanImports('package com.acme\n\nimport com.acme.order.Order\n', 'kotlin'))
       .toEqual(['com.acme.order.Order'])
   })
+
+  it('跨行的具名 import 也能扫到——这是最常见的 TS 写法', () => {
+    expect(scanImports("import {\n  a,\n  b,\n} from './mod.js'\n", 'ts')).toEqual(['./mod.js'])
+  })
+
+  it('副作用 import 没有 from，但同样是一条依赖边', () => {
+    expect(scanImports("import './register.js'\n", 'ts')).toEqual(['./register.js'])
+  })
 })
 
 describe('buildDepGraph', () => {
@@ -77,5 +85,21 @@ describe('buildDepGraph', () => {
     const files = ['src/a.ts']
     const contents = new Map([['src/a.ts', "import { x } from './a.js'\n"]])
     expect(buildDepGraph(files, contents).edges.get('src/a.ts')?.size ?? 0).toBe(0)
+  })
+
+  it('包路径后缀有歧义时，结果与输入文件的顺序无关', () => {
+    const files = [
+      'z/src/main/kotlin/com/acme/Order.kt',
+      'a/lib/src/main/kotlin/com/acme/Order.kt',
+      'x/Main.kt',
+    ]
+    const contents = new Map(
+      files.map((f) => [f, f.endsWith('Main.kt') ? 'import com.acme.Order\n' : 'class Order\n']),
+    )
+    const forward = buildDepGraph(files, contents)
+    const backward = buildDepGraph([...files].reverse(), contents)
+    expect([...(forward.edges.get('x/Main.kt') ?? [])])
+      .toEqual([...(backward.edges.get('x/Main.kt') ?? [])])
+    expect([...(forward.edges.get('x/Main.kt') ?? [])]).toHaveLength(1)
   })
 })

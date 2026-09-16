@@ -24,8 +24,14 @@ export function languageOf(path: string): SourceLang | null {
 }
 
 const TS_PATTERNS = [
-  /\bimport\s[^'"\n]*?from\s*['"]([^'"]+)['"]/g,
-  /\bexport\s[^'"\n]*?from\s*['"]([^'"]+)['"]/g,
+  // 字符类里**不能**排除 \n：跨行的具名 import 是最常见的 TS 写法之一，
+  // 排除换行会让这类 import 一条都扫不到，而文件仍被记进 scanned——
+  // 依赖图缺边却看起来一切正常。排除引号就足以保证匹配不会跨过任何字符串
+  // 字面量，所以 import 与它的 from 之间最多只能隔着这条语句自己的内容。
+  /\bimport\s[^'"]*?from\s*['"]([^'"]+)['"]/g,
+  /\bexport\s[^'"]*?from\s*['"]([^'"]+)['"]/g,
+  // 副作用 import 没有 from，但它同样是一条真实的依赖边
+  /\bimport\s+['"]([^'"]+)['"]/g,
   /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g,
   /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g,
 ]
@@ -120,11 +126,17 @@ function resolveTs(from: string, spec: string, present: Set<string>): string | n
  */
 function resolveKotlin(spec: string, present: Set<string>): string | null {
   const suffix = spec.replace(/\./g, '/')
+  const matches: string[] = []
   for (const candidate of present) {
     const stem = candidate.replace(/\.(kt|kts|java)$/, '')
-    if (stem === suffix || stem.endsWith(`/${suffix}`)) return candidate
+    if (stem === suffix || stem.endsWith(`/${suffix}`)) matches.push(candidate)
   }
-  return null
+  if (matches.length === 0) return null
+  // 多模块仓库里两个文件可能带同样的包路径后缀。谁赢不重要，重要的是同样的
+  // 输入永远给同样的答案——靠 present 的插入顺序定夺，等于把调用方的文件
+  // 排序渗进章节顺序里。最短优先（最贴近的匹配），同长按字典序。
+  matches.sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0))
+  return matches[0] as string
 }
 
 /**
