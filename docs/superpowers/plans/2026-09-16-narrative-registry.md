@@ -982,7 +982,7 @@ git commit -m 'feat(core): 沿依赖序贪心切段，跨目录与超额必断'
   - `interface ChapterRecord { key: string; index: number; title: string; intro: string; status: ChapterStatus; members: string[]; keyRenamedFrom: string | null; createdRound: number; lastActiveRound: number }`
   - `interface Registry { version: 1; chapters: ChapterRecord[] }`
   - `const EMPTY_REGISTRY: Registry`
-  - `interface UpdateInput { registry: Registry; segments: Segment[]; round: number; present: Set<string>; activeKeys: Set<string>; order: string[] }`
+  - `interface UpdateInput { registry: Registry; segments: Segment[]; round: number; present: Set<string>; activeUnits: Set<string>; order: string[] }`
   - `function updateRegistry(input: UpdateInput): Registry`
   - `function readRegistry(reviewRoot: string): Promise<Registry>`
   - `function writeRegistry(reviewRoot: string, registry: Registry): Promise<void>`
@@ -1007,7 +1007,7 @@ describe('updateRegistry', () => {
       segments: [seg('a.ts', ['a.ts', 'b.ts'])],
       round: 1,
       present: new Set(['a.ts', 'b.ts']),
-      activeKeys: new Set(['a.ts']),
+      activeUnits: new Set(['a.ts']),
       order: ['a.ts', 'b.ts'],
     })
     expect(got.chapters).toHaveLength(1)
@@ -1019,11 +1019,11 @@ describe('updateRegistry', () => {
   it('本轮没动的章标 empty 而不是消失', () => {
     const before = updateRegistry({
       registry: EMPTY_REGISTRY, segments: [seg('a.ts', ['a.ts'])], round: 1,
-      present: new Set(['a.ts']), activeKeys: new Set(['a.ts']), order: ['a.ts'],
+      present: new Set(['a.ts']), activeUnits: new Set(['a.ts']), order: ['a.ts'],
     })
     const after = updateRegistry({
       registry: before, segments: [], round: 2,
-      present: new Set(['a.ts']), activeKeys: new Set(), order: [],
+      present: new Set(['a.ts']), activeUnits: new Set(), order: [],
     })
     expect(after.chapters).toHaveLength(1)
     expect(after.chapters[0]?.status).toBe('empty')
@@ -1033,11 +1033,11 @@ describe('updateRegistry', () => {
   it('成员全被删除时章标 deleted，仍留在册里', () => {
     const before = updateRegistry({
       registry: EMPTY_REGISTRY, segments: [seg('a.ts', ['a.ts'])], round: 1,
-      present: new Set(['a.ts']), activeKeys: new Set(['a.ts']), order: ['a.ts'],
+      present: new Set(['a.ts']), activeUnits: new Set(['a.ts']), order: ['a.ts'],
     })
     const after = updateRegistry({
       registry: before, segments: [], round: 2,
-      present: new Set(), activeKeys: new Set(), order: [],
+      present: new Set(), activeUnits: new Set(), order: [],
     })
     expect(after.chapters).toHaveLength(1)
     expect(after.chapters[0]?.status).toBe('deleted')
@@ -1046,11 +1046,11 @@ describe('updateRegistry', () => {
   it('段首文件被删时 key 顺延，并记下 keyRenamedFrom', () => {
     const before = updateRegistry({
       registry: EMPTY_REGISTRY, segments: [seg('a.ts', ['a.ts', 'b.ts'])], round: 1,
-      present: new Set(['a.ts', 'b.ts']), activeKeys: new Set(['a.ts']), order: ['a.ts', 'b.ts'],
+      present: new Set(['a.ts', 'b.ts']), activeUnits: new Set(['a.ts']), order: ['a.ts', 'b.ts'],
     })
     const after = updateRegistry({
       registry: before, segments: [], round: 2,
-      present: new Set(['b.ts']), activeKeys: new Set(), order: ['b.ts'],
+      present: new Set(['b.ts']), activeUnits: new Set(), order: ['b.ts'],
     })
     expect(after.chapters[0]?.key).toBe('b.ts')
     expect(after.chapters[0]?.keyRenamedFrom).toBe('a.ts')
@@ -1059,12 +1059,12 @@ describe('updateRegistry', () => {
   it('已在册的文件不会被本轮的 segment 拉到别的章去', () => {
     const before = updateRegistry({
       registry: EMPTY_REGISTRY, segments: [seg('a.ts', ['a.ts', 'b.ts'])], round: 1,
-      present: new Set(['a.ts', 'b.ts']), activeKeys: new Set(['a.ts']), order: ['a.ts', 'b.ts'],
+      present: new Set(['a.ts', 'b.ts']), activeUnits: new Set(['a.ts']), order: ['a.ts', 'b.ts'],
     })
     // 第 2 轮算出来的段把 b.ts 划到了另一章——册优先，b.ts 必须留在原章
     const after = updateRegistry({
       registry: before, segments: [seg('a.ts', ['a.ts']), seg('b.ts', ['b.ts'])], round: 2,
-      present: new Set(['a.ts', 'b.ts']), activeKeys: new Set(['a.ts']), order: ['a.ts', 'b.ts'],
+      present: new Set(['a.ts', 'b.ts']), activeUnits: new Set(['a.ts']), order: ['a.ts', 'b.ts'],
     })
     expect(after.chapters).toHaveLength(1)
     expect(after.chapters[0]?.members).toEqual(['a.ts', 'b.ts'])
@@ -1076,7 +1076,7 @@ describe('updateRegistry', () => {
       segments: [seg('x/a.ts', ['x/a.ts']), seg('z/c.ts', ['z/c.ts'])],
       round: 1,
       present: new Set(['x/a.ts', 'z/c.ts']),
-      activeKeys: new Set(['x/a.ts', 'z/c.ts']),
+      activeUnits: new Set(['x/a.ts', 'z/c.ts']),
       order: ['x/a.ts', 'z/c.ts'],
     })
     const after = updateRegistry({
@@ -1084,7 +1084,7 @@ describe('updateRegistry', () => {
       segments: [seg('y/b.ts', ['y/b.ts'])],
       round: 2,
       present: new Set(['x/a.ts', 'y/b.ts', 'z/c.ts']),
-      activeKeys: new Set(['y/b.ts']),
+      activeUnits: new Set(['y/b.ts']),
       order: ['x/a.ts', 'y/b.ts', 'z/c.ts'],
     })
     expect(after.chapters.map((c) => c.key)).toEqual(['x/a.ts', 'y/b.ts', 'z/c.ts'])
@@ -1139,8 +1139,8 @@ export interface UpdateInput {
   round: number
   /** 快照里仍然存在的 canonical path */
   present: Set<string>
-  /** 本轮真有 hunk 的章 key */
-  activeKeys: Set<string>
+  /** 本轮真有改动的 canonical 单元。章是否 active 由它的成员是否在这里决定 */
+  activeUnits: Set<string>
   /** 本轮的依赖序，用来给新章定位 */
   order: string[]
 }
@@ -1151,7 +1151,7 @@ export interface UpdateInput {
  * 就可能把一批文件拽到新章，人写的批注全部漂走。
  */
 export function updateRegistry(input: UpdateInput): Registry {
-  const { registry, segments, round, present, activeKeys, order } = input
+  const { registry, segments, round, present, activeUnits, order } = input
   const orderPos = new Map(order.map((path, i) => [path, i]))
 
   // 1) 已有章：剔掉已删成员，决定状态，必要时顺延 key
@@ -1166,7 +1166,7 @@ export function updateRegistry(input: UpdateInput): Registry {
       continue
     }
 
-    const active = activeKeys.has(chapter.key) || members.some((m) => activeKeys.has(m))
+    const active = members.some((m) => activeUnits.has(m))
     const renamed = !members.includes(chapter.key)
     kept.push({
       ...chapter,
@@ -2143,7 +2143,9 @@ export function buildPlan(
       key: record.key,
       title: override?.title ?? record.title,
       intro: assignment.intros?.get(record.key) ?? override?.intro ?? record.intro,
-      status: hasContent ? 'active' : record.status,
+      // 册里标 active、但本轮该章的 hunk 全被批注钉去了别处时，不能跟着册说
+      // 'active'——那会产出 status: 'active' 却 commitIndex: null 的自相矛盾章节
+      status: hasContent ? 'active' : record.status === 'deleted' ? 'deleted' : 'empty',
       keyRenamedFrom: record.keyRenamedFrom,
       hunkIds,
       filePaths,
@@ -2732,7 +2734,7 @@ async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
     segments,
     round,
     present: p.present,
-    activeKeys: new Set(p.units),
+    activeUnits: new Set(p.units),
     order: p.order,
   })
 
@@ -2766,11 +2768,37 @@ replay / verify / attachWorktree 之后，产物多写两份：
     cycles: p.cycles,
 ```
 
-`planAndValidate` 这个 helper 删掉——它的两个调用点现在需要的上下文不一样了，
-共用反而要传一堆参数。`planOnly` 里照抄上面「draftCtx → assignment → segments →
-updateRegistry → buildPlan → validatePlan」这一段，但**不写任何文件**：
-`readRegistry`/`readAnnotations` 照读（只读不写），`--reset-chapters` 在 dry-run 下
-只影响内存里的那份，不落盘。
+`planAndValidate` 这个 helper 换成 `assemble`，**narrate 与 planOnly 共用同一份**——
+「draftCtx → assignment → segments → updateRegistry → buildPlan → validatePlan」
+这一整段逻辑绝不能在两处各写一遍，两份迟早会漂：
+
+```ts
+interface Assembled {
+  plan: Plan
+  warnings: ValidationIssue[]
+  registry: Registry
+  annotations: Annotation[]
+}
+
+/**
+ * 装配一轮叙事：读册与批注 → 迁锚 → 问 planner → 更新册 → 装配 → 校验。
+ * **只算不落盘**，写文件是调用方的事——dry-run 与正式路径靠这一点共用同一段逻辑，
+ * 而不是各写一遍然后慢慢漂成两种行为。
+ */
+async function assemble(
+  repo: string,
+  root: string,
+  p: Prepared,
+  round: number,
+  opts: NarrateOptions,
+  previousPlan: Plan | null,
+): Promise<Assembled>
+```
+
+`planOnly` 传一个不存在的 `root`（该仓库尚无 review 目录时 `readRegistry` /
+`readAnnotations` 都返回空值，正是 dry-run 想要的），或者传真实 root 但**不调用**
+`writeRegistry` / `writeAnnotations`。`--reset-chapters` 在 dry-run 下只作用于
+`assemble` 内存里的那份册，不落盘。
 
 `NarrateOptions` 加 `resetChapters?: true`；文件顶部补上
 `import { rm } from 'node:fs/promises'` 与 registry / anchors / pair / deps / order /
