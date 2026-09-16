@@ -34,6 +34,22 @@ Plan 1 的实现选了后者（`run.ts` 直接抛 `VerifyError`）。
 
 **为什么 verify 抓不到**：`replay` 的 `isComplete = (0 === 0)` 恒真 → 走快路径用终态 blob → tree 仍然字节一致 → verify 通过。这是一个连 verify 都看不见的静默数据缺失。
 
+**2026-09-16 用 `--dry-run` 在真实输入上复现**（一个含空格 / 中文 / 符号链接 / 权限位变更的仓库）：
+
+```
+$ unfold narrate --default-branch main --dry-run
+  第 1 章 契约（1 文件 / 1 hunk）
+      src/types.ts
+  第 2 章 核心逻辑（3 文件 / 0 hunk）
+      src/has space.ts        ← 真有内容改动，hunk 数 0
+      src/run.sh              ← 仅改权限位，0 hunk 是对的
+      src/有空格 中文.ts       ← 真有内容改动，hunk 数 0
+```
+
+同一次运行里，`tests/e2e/real-repo.test.ts` 的四条产品承诺**全部通过**——
+再次印证：承诺成立不等于数据完整，而 115 个合成测试一个都没发现这件事。
+对中文路径的用户（本项目的第一个用户就是）来说，这是日常会撞上的。
+
 **v1 后果**：仅 CodeTour 的 step 从真实行号退回第 1 行。
 **v2 后果**：AI planner 按 hunk 分章时，任何中文 / 带空格路径的文件分章能力直接消失。
 
