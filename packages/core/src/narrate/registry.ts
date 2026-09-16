@@ -123,8 +123,17 @@ export function updateRegistry(input: UpdateInput): Registry {
   const chapters = [...kept]
   for (const candidate of fresh.sort((a, b) => posOf(a) - posOf(b))) {
     const at = posOf(candidate)
-    // 插到第一个「依赖序更靠后」的已有章之前；都更靠前就追加到末尾
-    const index = chapters.findIndex((c) => posOf(c) > at)
+    // 插到第一个「本轮确实排在它后面」的已有章之前；没有这样的邻居就追加到末尾。
+    //
+    // **只拿本轮有位置的章当锚点**：本轮没动的章（empty / deleted）没有任何成员
+    // 出现在 order 里，posOf 给的是 +Infinity。把它也算成「更靠后」的话，
+    // 册里只要有一个空章，findIndex 就永远命中它，新章一律插到它前面——
+    // 实测过一次：被依赖方落在第 4 章、依赖它的新章落到第 2 章，读者先读到
+    // 调用方。spec §5.1 要的是「新章按依赖序插到该去的位置」。
+    const index = chapters.findIndex((c) => {
+      const pos = posOf(c)
+      return Number.isFinite(pos) && pos > at
+    })
     if (index < 0) chapters.push(candidate)
     else chapters.splice(index, 0, candidate)
   }

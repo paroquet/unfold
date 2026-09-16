@@ -76,6 +76,31 @@ describe('updateRegistry', () => {
     expect(after.chapters[0]?.members).toEqual(['a.ts', 'b.ts'])
   })
 
+  it('新章插位时忽略本轮没有位置的空章，锚在真正排在它后面的章上（I1 回归）', () => {
+    const before = updateRegistry({
+      registry: EMPTY_REGISTRY,
+      segments: [seg('x/a.ts', ['x/a.ts']), seg('y/b.ts', ['y/b.ts'])],
+      round: 1,
+      present: new Set(['x/a.ts', 'y/b.ts']),
+      activeUnits: new Set(['x/a.ts', 'y/b.ts']),
+      order: ['x/a.ts', 'y/b.ts'],
+    })
+    // 第 2 轮：x/a.ts 那章本轮没动（不在 order 里）→ 空章，没有位置；
+    // 新章 z/c.ts 在依赖序上排在 y/b.ts 之后，必须落到最后。
+    // 修之前空章的 posOf 是 +Infinity，findIndex 第一个就命中它，
+    // z/c.ts 会被插到最前面，读者先读到依赖别人的那一章。
+    const after = updateRegistry({
+      registry: before,
+      segments: [seg('y/b.ts', ['y/b.ts']), seg('z/c.ts', ['z/c.ts'])],
+      round: 2,
+      present: new Set(['x/a.ts', 'y/b.ts', 'z/c.ts']),
+      activeUnits: new Set(['y/b.ts', 'z/c.ts']),
+      order: ['y/b.ts', 'z/c.ts'],
+    })
+    expect(after.chapters.map((c) => c.key)).toEqual(['x/a.ts', 'y/b.ts', 'z/c.ts'])
+    expect(after.chapters.map((c) => c.status)).toEqual(['empty', 'active', 'active'])
+  })
+
   it('新章按依赖序插到该去的位置，已有章不重排', () => {
     const before = updateRegistry({
       registry: EMPTY_REGISTRY,
