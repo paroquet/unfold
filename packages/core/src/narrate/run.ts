@@ -8,16 +8,27 @@ import { addWorktree, attachWorktree } from '../git/worktree.js'
 import { newReviewId, reviewRoot } from '../state/paths.js'
 import { latestReview, readPlan } from '../state/reviews.js'
 import { computeChanges } from './diff.js'
+import { canonicalPath } from './pair.js'
+import { buildDepGraph } from './deps.js'
+import { topoOrder } from './order.js'
+import { segment } from './segment.js'
 import { RulePlanner } from './rule-planner.js'
 import { buildPlan } from './build-plan.js'
 import { loadRules } from './rules.js'
 import { validatePlan } from './validate.js'
+import { EMPTY_REGISTRY, readRegistry, updateRegistry, writeRegistry } from './registry.js'
+import { migrateAnchors, pinnedByAnnotations, readAnnotations, writeAnnotations } from './anchors.js'
 import { replay } from './replay.js'
 import { verify } from './verify.js'
 import { toCodeTours } from '../tour/codetour.js'
 import type { ChapterPlanner, Plan, PlanContext } from './plan.js'
 import type { FileChange } from './diff.js'
 import type { NarrativeRules } from './rules.js'
+import type { DepGraph } from './deps.js'
+import type { Segment } from './segment.js'
+import type { Registry } from './registry.js'
+import type { Annotation } from './anchors.js'
+import type { ValidationIssue } from './validate.js'
 
 export interface NarrateOptions {
   explicit?: string
@@ -35,6 +46,12 @@ export interface NarrateOptions {
    * 该仓库还没有任何 review 时，等同于新建一次。
    */
   reuse?: true
+  /**
+   * 丢掉章节册重新按本轮规则切段，而不是沿用历轮归属。
+   * 批注不删——只解除它们与旧章的绑定（chapterKey: null，state: 'unanchored'），
+   * 下一轮会按批注锚点所在的文件重新归入新章。
+   */
+  resetChapters?: true
 }
 
 /** 正常情况：工作区相对 base 有改动，产出了叙事分支与全部产物。 */
@@ -52,6 +69,12 @@ export interface NarrateChanges {
   tip: string
   chapters: number
   worktree: string
+  /** 章节体检：可读性提示，不拦截出货（error 已在 assemble 内部拒绝） */
+  warnings: ValidationIssue[]
+  /** 更新后的章节册总章数（含 empty / deleted） */
+  registryChapters: number
+  depGraph: DepGraph
+  cycles: string[][]
 }
 
 /**
@@ -77,22 +100,17 @@ export type NarrateResult = NarrateChanges | NarrateNoChanges
  */
 export type PlanOnlyResult =
   | { hasChanges: false; branch: string; base: string }
-  | { hasChanges: true; branch: string; base: string; snapshot: string; plan: Plan }
-
-/**
- * 规划并校验：planner 只回答归属，buildPlan 负责装配，validatePlan 是最后一道闸。
- * 校验不过即抛错，绝不降级——dry-run 与正式路径共用这一条。
- */
-async function planAndValidate(ctx: PlanContext, planner: ChapterPlanner): Promise<Plan> {
-  const plan = buildPlan(ctx, await planner.assign(ctx), planner.id)
-  const issues = validatePlan(plan, ctx)
-  if (issues.length > 0) {
-    throw new Error(
-      `plan 未通过语义校验：\n${issues.map((i) => `  [${i.code}] ${i.message}`).join('\n')}`,
-    )
-  }
-  return plan
-}
+  | {
+      hasChanges: true
+      branch: string
+      base: string
+      snapshot: string
+      plan: Plan
+      warnings: ValidationIssue[]
+      registryChapters: number
+      depGraph: DepGraph
+      cycles: string[][]
+    }
 
 interface Prepared {
   branch: string
@@ -101,11 +119,21 @@ interface Prepared {
   snapshotCommit: string
   changes: FileChange[]
   rules: NarrativeRules
+  /** 真实路径 → canonical path */
+  canonical: Map<string, string>
+  /** 去重后的 canonical 单元，供依赖图与切段使用 */
+  units: string[]
+  /** 快照树里仍然存在的 canonical 单元 */
+  present: Set<string>
+  graph: DepGraph
+  order: string[]
+  cycles: string[][]
+  segments: Segment[]
 }
 
 /**
- * `narrate()` 与 `planOnly()` 的共用前缀：拿到分支名、快照、base 与改动集。
- * 抽出来是因为这四步必须保持一致——两边各写一遍迟早会漂。
+ * `narrate()` 与 `planOnly()` 的共用前缀：从「拿到改动集」到「切出本轮段」
+ * 全部算完。抽出来是因为这一整条推导必须两边保持一致——各写一遍迟早会漂。
  */
 async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
   const branch = await currentBranch(repo)
@@ -119,6 +147,51 @@ async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
     ...(opts.defaultBranch !== undefined ? { defaultBranch: opts.defaultBranch } : {}),
   })
   const changes = await computeChanges(repo, baseResolution.base, snap.commit)
+
+  // 快照树的全量文件清单。一次 ls-tree 换掉「逐个候选 cat-file -e」，
+  // 配对规约要查成百上千次「这个候选存在吗」。
+  const treeList = await git(repo, ['ls-tree', '-r', '--name-only', '-z', snap.commit])
+  const tree = new Set(treeList.split('\0').filter((p) => p !== ''))
+
+  const canonical = new Map<string, string>()
+  for (const change of changes) {
+    canonical.set(change.path, canonicalPath(change.path, rules.pair, (p) => tree.has(p)))
+  }
+
+  const units = [...new Set(canonical.values())].sort()
+  const fileCountOf = new Map<string, number>()
+  for (const unit of canonical.values()) {
+    fileCountOf.set(unit, (fileCountOf.get(unit) ?? 0) + 1)
+  }
+
+  // 单元的内容从**快照**里取，不碰工作区。删除的、二进制的、树里没有的取 null
+  const changeOf = new Map(changes.map((c) => [c.path, c]))
+  const contents = new Map<string, string | null>()
+  for (const unit of units) {
+    const own = changeOf.get(unit)
+    if (own?.binary === true || own?.kind === 'delete' || !tree.has(unit)) {
+      contents.set(unit, null)
+      continue
+    }
+    contents.set(unit, await git(repo, ['cat-file', 'blob', `${snap.commit}:${unit}`], {
+      trim: false,
+    }))
+  }
+
+  const graph = buildDepGraph(units, contents)
+  const { order, cycles } = topoOrder(units, graph.edges, rules.order)
+  const segments = segment({
+    order,
+    cycles,
+    maxFiles: rules.maxFiles,
+    fileCount: (unit) => fileCountOf.get(unit) ?? 1,
+  })
+
+  const present = new Set<string>(tree)
+  for (const [path, unit] of canonical) {
+    if (changeOf.get(path)?.kind !== 'delete') present.add(unit)
+  }
+
   return {
     branch,
     base: baseResolution.base,
@@ -126,12 +199,137 @@ async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
     snapshotCommit: snap.commit,
     changes,
     rules,
+    canonical,
+    units,
+    present,
+    graph,
+    order,
+    cycles,
+    segments,
+  }
+}
+
+interface Assembled {
+  plan: Plan
+  warnings: ValidationIssue[]
+  registry: Registry
+  annotations: Annotation[]
+}
+
+/**
+ * 装配一轮叙事：读册与批注 → 迁锚 → 问 planner → 更新册 → 装配 → 校验。
+ * **只算不落盘**，写文件是调用方的事——dry-run 与正式路径靠这一点共用同一段逻辑，
+ * 而不是各写一遍然后慢慢漂成两种行为。
+ *
+ * `previousPlan` 由调用方决定要不要传：`--reset-chapters` 时调用方传 `null`，
+ * 否则跨轮漂移校验（validatePlan 的 cross-round-drift）会把「刻意重新分组」
+ * 当成事故拦下来——那条校验守的是「同样的规则不该无声换章」，而 reset 恰恰
+ * 是显式要求换一次，两者不能互相拦。
+ */
+async function assemble(
+  // 签名保留 repo：与 prepare() 对齐，且 assemble 未来若要接 AI planner 的
+  // 网络/工具调用大概率要用到它。当前实现全部素材已经在 `p: Prepared` 里，
+  // 故意不用，靠下划线告诉 noUnusedParameters「知道，先留着」。
+  _repo: string,
+  root: string,
+  p: Prepared,
+  round: number,
+  opts: NarrateOptions,
+  previousPlan: Plan | null,
+): Promise<Assembled> {
+  // --reset-chapters：册退回空册。不在这里删文件——assemble 只算不落盘，
+  // 落地与否（也就是「是否真的丢掉旧册」）由调用方写不写 writeRegistry 决定，
+  // dry-run 因此天然不会碰到真实状态目录。
+  const registryBefore = opts.resetChapters === true ? EMPTY_REGISTRY : await readRegistry(root)
+
+  const annotationFile = await readAnnotations(root)
+  const migrated = migrateAnchors(annotationFile.annotations, p.changes)
+  // reset 必须在 migrateAnchors 之后覆盖：迁移会按本轮 hunk 与批注的重叠情况
+  // 把 state 判成 'stale'，而 reset 要的是「解除归属」这一个更强的结论，
+  // 顺序反了会让 reset 的批注看起来还跟旧章有关系。
+  const annotations: Annotation[] =
+    opts.resetChapters === true
+      ? migrated.map((a) => ({ ...a, chapterKey: null, state: 'unanchored' as const }))
+      : migrated
+  const pinned = pinnedByAnnotations(annotations, p.changes)
+
+  const planner = opts.planner ?? new RulePlanner(p.segments)
+
+  const draftCtx: PlanContext = {
+    base: p.base,
+    snapshot: p.snapshotCommit,
+    changes: p.changes,
+    rules: p.rules,
+    canonical: p.canonical,
+    registry: registryBefore,
+    pinned,
+    deps: p.graph.edges,
+  }
+  const assignment = await planner.assign(draftCtx)
+
+  // 把 planner 的归属还原成「段」的形状交给册；
+  // 册不关心归属是规则算的还是 AI 给的，只认这一种输入
+  const grouped = new Map<string, string[]>()
+  for (const unit of p.order) {
+    const key = assignment.byChapter.get(unit)
+    if (key === undefined) continue
+    grouped.set(key, [...(grouped.get(key) ?? []), unit])
+  }
+  const segments: Segment[] = [...grouped].map(([key, members]) => {
+    const meta = assignment.proposed?.get(key)
+    return {
+      key,
+      members,
+      title: meta?.title ?? key,
+      intro: meta?.intro ?? '',
+    }
+  })
+
+  const registry = updateRegistry({
+    registry: registryBefore,
+    segments,
+    round,
+    present: p.present,
+    activeUnits: new Set(p.units),
+    order: p.order,
+  })
+
+  const ctx: PlanContext = {
+    ...draftCtx,
+    registry,
+    ...(previousPlan !== null ? { previous: previousPlan } : {}),
+  }
+
+  const plan = buildPlan(ctx, assignment, planner.id)
+  const issues = validatePlan(plan, ctx)
+  const errors = issues.filter((i) => i.severity === 'error')
+  if (errors.length > 0) {
+    throw new Error(
+      `plan 未通过语义校验：\n${errors.map((i) => `  [${i.code}] ${i.message}`).join('\n')}`,
+    )
+  }
+  const warnings = issues.filter((i) => i.severity === 'warn')
+
+  return { plan, warnings, registry, annotations }
+}
+
+async function currentBranch(repo: string): Promise<string> {
+  try {
+    return await git(repo, ['symbolic-ref', '--short', 'HEAD'])
+  } catch (err) {
+    if (err instanceof GitError) return 'detached'
+    throw err
   }
 }
 
 /**
  * 只算 plan，不产出任何东西：不钉快照 ref、不建 worktree、不 replay、
  * 不写状态目录。用于反复调参时秒级看「章节会怎么分」。
+ *
+ * dry-run 用一个必然不存在的 review root：`assemble` 内部的 `readRegistry` /
+ * `readAnnotations` 对不存在的目录返回空值，预览因此既不读也不可能写到
+ * 任何真实 review 状态——不需要单独绕开写入逻辑，因为 `assemble` 本来就
+ * 只算不落盘，这里连 root 都是假的。
  *
  * 注意它仍会在对象库里留下一个未被引用的快照 commit（与干净工作区
  * 早退同源），`git gc --prune=now` 可回收。
@@ -144,27 +342,20 @@ export async function planOnly(
   if (p.changes.length === 0) {
     return { hasChanges: false, branch: p.branch, base: p.base }
   }
-  const ctx: PlanContext = {
-    base: p.base,
-    snapshot: p.snapshotCommit,
-    changes: p.changes,
-    rules: p.rules,
-  }
+
+  const root = await reviewRoot(repo, newReviewId(p.branch, opts.now))
+  const assembled = await assemble(repo, root, p, 1, opts, null)
+
   return {
     hasChanges: true,
     branch: p.branch,
     base: p.base,
     snapshot: p.snapshotCommit,
-    plan: await planAndValidate(ctx, opts.planner ?? new RulePlanner()),
-  }
-}
-
-async function currentBranch(repo: string): Promise<string> {
-  try {
-    return await git(repo, ['symbolic-ref', '--short', 'HEAD'])
-  } catch (err) {
-    if (err instanceof GitError) return 'detached'
-    throw err
+    plan: assembled.plan,
+    warnings: assembled.warnings,
+    registryChapters: assembled.registry.chapters.length,
+    depGraph: p.graph,
+    cycles: p.cycles,
   }
 }
 
@@ -184,44 +375,45 @@ export async function narrate(
 ): Promise<NarrateResult> {
   const previous = opts.reuse === true ? await latestReview(repo) : null
   const p = await prepare(repo, opts)
-  const { branch, rules, changes } = p
+  const { branch, changes } = p
   const reviewId = previous?.reviewId ?? newReviewId(branch, opts.now)
-  const snap = { commit: p.snapshotCommit }
-  const baseResolution = { base: p.base, source: p.baseSource }
 
   if (changes.length === 0) {
-    return { hasChanges: false, branch, base: baseResolution.base }
+    return { hasChanges: false, branch, base: p.base }
   }
 
   // 复用时把上一轮的 plan 带进来，跨轮钉回才真正生效（仅当规则指纹相同）
   const previousPlan =
     previous === null ? null : await readPlan(repo, previous.reviewId).catch(() => null)
 
-  const ctx: PlanContext = {
-    base: baseResolution.base,
-    snapshot: snap.commit,
-    changes,
-    rules,
-    ...(previousPlan !== null ? { previous: previousPlan } : {}),
-  }
-
   const root = await reviewRoot(repo, reviewId)
   await mkdir(join(root, 'tours'), { recursive: true })
+  const round = await nextRound(repo, reviewId)
 
   // 快照钉 ref，扛得过 gc（spec §4.3）。复用时轮次递增，不覆盖历轮。
-  await pinSnapshot(repo, reviewId, await nextRound(repo, reviewId), snap.commit)
+  await pinSnapshot(repo, reviewId, round, p.snapshotCommit)
 
   // 轨道 A：worktree 直接停在终态。复用时它已经注册过了，重复 add 会报错。
   const worktree = join(root, 'worktree')
   if (!existsSync(worktree)) {
-    await addWorktree(repo, worktree, snap.commit)
+    await addWorktree(repo, worktree, p.snapshotCommit)
   }
 
-  // 轨道 B：规划 → 重提交 → 校验
-  const plan = await planAndValidate(ctx, opts.planner ?? new RulePlanner())
+  // 轨道 B：读册与批注 → 迁锚 → 问 planner → 更新册 → 装配 → 校验。
+  // --reset-chapters 时不把上一轮 plan 传进校验——那条跨轮漂移检查守的是
+  // 「同样规则下不该无声换章」，reset 恰恰是显式要求换一次，两者不能互拦。
+  const assembled = await assemble(
+    repo,
+    root,
+    p,
+    round,
+    opts,
+    opts.resetChapters === true ? null : previousPlan,
+  )
+  const { plan, warnings, registry, annotations } = assembled
 
   const replayed = await replay(repo, plan, changes)
-  await verify(repo, replayed.tip, snap.commit)
+  await verify(repo, replayed.tip, p.snapshotCommit)
 
   // 汇合：tree 一致 ⇒ 零文件改动
   const narrativeBranch = `unfold/${reviewId}`
@@ -235,8 +427,8 @@ export async function narrate(
         version: 1,
         repo,
         branch,
-        base: baseResolution.base,
-        baseSource: baseResolution.source,
+        base: p.base,
+        baseSource: p.baseSource,
         narrativeBranch,
         createdAt: (opts.now ?? new Date()).toISOString(),
       },
@@ -246,6 +438,8 @@ export async function narrate(
     'utf8',
   )
   await writeFile(join(root, 'plan.json'), `${JSON.stringify(plan, null, 2)}\n`, 'utf8')
+  await writeRegistry(root, registry)
+  await writeAnnotations(root, { version: 1, annotations })
 
   const tours = toCodeTours(plan, changes, narrativeBranch)
   for (const [i, tour] of tours.entries()) {
@@ -261,10 +455,14 @@ export async function narrate(
     reviewId,
     reviewRoot: root,
     branch: narrativeBranch,
-    base: baseResolution.base,
-    snapshot: snap.commit,
+    base: p.base,
+    snapshot: p.snapshotCommit,
     tip: replayed.tip,
     chapters: plan.chapters.length,
     worktree,
+    warnings,
+    registryChapters: registry.chapters.length,
+    depGraph: p.graph,
+    cycles: p.cycles,
   }
 }

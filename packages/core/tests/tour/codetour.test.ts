@@ -109,4 +109,19 @@ describe('toCodeTours', () => {
       { file: 'src/kept.ts', line: 5, description: '核心逻辑 — src/kept.ts' },
     ])
   })
+
+  it('空章不生成 tour', () => {
+    const p: Plan = {
+      version: 1, rulesFingerprint: 'f', base: 'b', snapshot: 's', plannerId: 'test',
+      chapters: [
+        { index: 1, commitIndex: null, key: 'empty', title: '空章', intro: '',
+          status: 'empty', keyRenamedFrom: null, hunkIds: [], filePaths: [] },
+        { index: 2, commitIndex: 1, key: 'a.ts', title: 'a', intro: '',
+          status: 'active', keyRenamedFrom: null, hunkIds: [], filePaths: ['a.ts'] },
+      ],
+    }
+    const tours = toCodeTours(p, [], 'unfold/x')
+    expect(tours).toHaveLength(1)
+    expect(tours[0]?.title).toContain('1.')
+  })
 })

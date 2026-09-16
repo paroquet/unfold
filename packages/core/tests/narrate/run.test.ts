@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { createTempRepo } from '../helpers/repo.js'
 import { narrate, planOnly } from '../../src/narrate/run.js'
 import { newReviewId } from '../../src/state/paths.js'
+import { readPlan } from '../../src/state/reviews.js'
+import { writeAnnotations, readAnnotations } from '../../src/narrate/anchors.js'
 
 describe('newReviewId', () => {
   it('由分支 slug、时间戳、毫秒与随机后缀组成', () => {
@@ -229,6 +231,67 @@ describe('narrate 端到端', () => {
 
     const { cleanReviews } = await import('../../src/state/cleanup.js')
     await cleanReviews(repo.dir)
+    await repo.cleanup()
+  })
+
+  it('实现与它的测试落在同一章，且按依赖序排在被依赖者之后', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/a.ts', 'export const a = 1\n')
+    await repo.commit('base')
+    await repo.write('src/b.ts', "import { a } from './a.js'\nexport const b = a\n")
+    await repo.write('tests/b.test.ts', "import { b } from '../src/b.js'\n")
+
+    const result = await narrate(repo.dir, {})
+    if (!result.hasChanges) throw new Error('应该有改动')
+    const plan = await readPlan(repo.dir, result.reviewId)
+    const active = plan.chapters.filter((c) => c.commitIndex !== null)
+
+    const withB = active.find((c) => c.filePaths.includes('src/b.ts'))
+    expect(withB?.filePaths).toContain('tests/b.test.ts')
+    await repo.cleanup()
+  })
+
+  it('第二轮复用时，已在册的文件不换章', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/a.ts', 'export const a = 1\n')
+    await repo.commit('base')
+    await repo.write('src/a.ts', 'export const a = 2\n')
+
+    const first = await narrate(repo.dir, {})
+    if (!first.hasChanges) throw new Error('应该有改动')
+    const before = await readPlan(repo.dir, first.reviewId)
+
+    await repo.write('src/z.ts', 'export const z = 1\n')
+    const second = await narrate(repo.dir, { reuse: true })
+    if (!second.hasChanges) throw new Error('应该有改动')
+    const after = await readPlan(repo.dir, second.reviewId)
+
+    const keyOf = (plan: typeof before, path: string): string | undefined =>
+      plan.chapters.find((c) => c.filePaths.includes(path))?.key
+    expect(keyOf(after, 'src/a.ts')).toBe(keyOf(before, 'src/a.ts'))
+    await repo.cleanup()
+  })
+
+  it('--reset-chapters 丢册重推，并把批注标成 unanchored', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/a.ts', 'export const a = 1\n')
+    await repo.commit('base')
+    await repo.write('src/a.ts', 'export const a = 2\n')
+
+    const first = await narrate(repo.dir, {})
+    if (!first.hasChanges) throw new Error('应该有改动')
+    await writeAnnotations(first.reviewRoot, {
+      version: 1,
+      annotations: [{
+        id: 'n1', chapterKey: 'src/a.ts', path: 'src/a.ts', startLine: 1, endLine: 1,
+        anchorHash: 'sha256:x', body: '看这里', state: 'live', round: 1,
+      }],
+    })
+
+    await narrate(repo.dir, { reuse: true, resetChapters: true })
+    const held = await readAnnotations(first.reviewRoot)
+    expect(held.annotations[0]?.state).toBe('unanchored')
+    expect(held.annotations[0]?.body).toBe('看这里')
     await repo.cleanup()
   })
 })

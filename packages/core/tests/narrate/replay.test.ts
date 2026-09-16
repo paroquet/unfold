@@ -1,12 +1,55 @@
 import { describe, it, expect } from 'vitest'
 import { createTempRepo } from '../helpers/repo.js'
+import type { TempRepo } from '../helpers/repo.js'
 import { computeChanges } from '../../src/narrate/diff.js'
-import type { Hunk } from '../../src/narrate/diff.js'
-import { RulePlanner } from '../../src/narrate/rule-planner.js'
+import type { FileChange, Hunk } from '../../src/narrate/diff.js'
 import { buildPlan } from '../../src/narrate/build-plan.js'
 import { DEFAULT_RULES } from '../../src/narrate/rules.js'
 import { replay } from '../../src/narrate/replay.js'
 import { git } from '../../src/git/exec.js'
+import { snapshot } from '../../src/git/snapshot.js'
+import type { PlanContext, Plan } from '../../src/narrate/plan.js'
+import type { Registry } from '../../src/narrate/registry.js'
+
+/** 给脏工作区照一张快照 commit，取它的 sha——测试里常要在不提交的情况下算 changes */
+async function snapshotCommit(repo: TempRepo): Promise<string> {
+  return (await snapshot(repo.dir)).commit
+}
+
+/**
+ * 手工拼一份「每个 key 都已经在册里」的 Registry：这些测试只关心 replay
+ * 本身的行为（快路径/慢路径、删除、二进制），不关心切段算法怎么分组，
+ * 直接把想要的分组摆进册里最直接——buildPlan 认的是册，不是 planner。
+ */
+function registryOf(chapters: Array<{ key: string; members: string[] }>): Registry {
+  return {
+    version: 1,
+    chapters: chapters.map((c, i) => ({
+      key: c.key,
+      index: i + 1,
+      title: c.key,
+      intro: '',
+      status: 'active',
+      members: c.members,
+      keyRenamedFrom: null,
+      createdRound: 1,
+      lastActiveRound: 1,
+    })),
+  }
+}
+
+function ctxFor(base: string, snapshot: string, changes: FileChange[], registry: Registry): PlanContext {
+  return {
+    base,
+    snapshot,
+    changes,
+    rules: DEFAULT_RULES,
+    canonical: new Map(changes.map((c) => [c.path, c.path])),
+    registry,
+    pinned: new Map(),
+    deps: new Map(),
+  }
+}
 
 describe('replay', () => {
   it('终态 tree 与 snapshot tree 逐字节一致', async () => {
@@ -23,8 +66,9 @@ describe('replay', () => {
     const head = await repo.commit('work')
 
     const changes = await computeChanges(repo.dir, base, head)
-    const planCtx = { base, snapshot: head, changes, rules: DEFAULT_RULES }
-    const plan = buildPlan(planCtx, await new RulePlanner().assign(planCtx), 'rule')
+    const registry = registryOf([{ key: 'all', members: changes.map((c) => c.path) }])
+    const planCtx = ctxFor(base, head, changes, registry)
+    const plan = buildPlan(planCtx, { byChapter: new Map() }, 'rule')
     const result = await replay(repo.dir, plan, changes)
 
     expect(await repo.git('rev-parse', `${result.tip}^{tree}`)).toBe(
@@ -44,8 +88,14 @@ describe('replay', () => {
     const head = await repo.commit('work')
 
     const changes = await computeChanges(repo.dir, base, head)
-    const planCtx = { base, snapshot: head, changes, rules: DEFAULT_RULES }
-    const plan = buildPlan(planCtx, await new RulePlanner().assign(planCtx), 'rule')
+    // 两个文件各自成一章，且 types.ts 排在 engine.ts 之前——只有分在不同章
+    // 才谈得上「中间 commit 只含到本章为止」，这里手工摆出这个分组。
+    const registry = registryOf([
+      { key: 'src/types.ts', members: ['src/types.ts'] },
+      { key: 'src/engine.ts', members: ['src/engine.ts'] },
+    ])
+    const planCtx = ctxFor(base, head, changes, registry)
+    const plan = buildPlan(planCtx, { byChapter: new Map() }, 'rule')
     const result = await replay(repo.dir, plan, changes)
 
     const first = result.commits[0]!
@@ -63,8 +113,9 @@ describe('replay', () => {
     const head = await repo.commit('delete')
 
     const changes = await computeChanges(repo.dir, base, head)
-    const planCtx = { base, snapshot: head, changes, rules: DEFAULT_RULES }
-    const plan = buildPlan(planCtx, await new RulePlanner().assign(planCtx), 'rule')
+    const registry = registryOf([{ key: 'all', members: changes.map((c) => c.path) }])
+    const planCtx = ctxFor(base, head, changes, registry)
+    const plan = buildPlan(planCtx, { byChapter: new Map() }, 'rule')
     const result = await replay(repo.dir, plan, changes)
 
     const files = await repo.git('ls-tree', '-r', '--name-only', result.tip)
@@ -171,13 +222,37 @@ describe('replay', () => {
     const head = await repo.commit('work')
 
     const changes = await computeChanges(repo.dir, base, head)
-    const planCtx = { base, snapshot: head, changes, rules: DEFAULT_RULES }
-    const plan = buildPlan(planCtx, await new RulePlanner().assign(planCtx), 'rule')
+    const registry = registryOf([{ key: 'all', members: changes.map((c) => c.path) }])
+    const planCtx = ctxFor(base, head, changes, registry)
+    const plan = buildPlan(planCtx, { byChapter: new Map() }, 'rule')
     const result = await replay(repo.dir, plan, changes)
 
     expect(await repo.git('rev-parse', `${result.tip}^{tree}`)).toBe(
       await repo.git('rev-parse', `${head}^{tree}`),
     )
+    await repo.cleanup()
+  })
+
+  it('没有内容的章不产 commit，但后面的章仍接在前一个 commit 上', async () => {
+    const repo = await createTempRepo()
+    await repo.write('a.ts', 'one\n')
+    const base = await repo.commit('base')
+    await repo.write('a.ts', 'two\n')
+
+    const changes = await computeChanges(repo.dir, base, await snapshotCommit(repo))
+    const plan: Plan = {
+      version: 1, rulesFingerprint: 'f', base, snapshot: await snapshotCommit(repo), plannerId: 'test',
+      chapters: [
+        { index: 1, commitIndex: null, key: 'empty', title: '空章', intro: '', status: 'empty',
+          keyRenamedFrom: null, hunkIds: [], filePaths: [] },
+        { index: 2, commitIndex: 1, key: 'a.ts', title: 'a', intro: '', status: 'active',
+          keyRenamedFrom: null, hunkIds: changes[0]!.hunks.map((h) => h.id), filePaths: ['a.ts'] },
+      ],
+    }
+
+    const result = await replay(repo.dir, plan, changes)
+    expect(result.commits).toHaveLength(1)
+    expect(await repo.git('rev-parse', `${result.tip}^`)).toBe(base)
     await repo.cleanup()
   })
 })

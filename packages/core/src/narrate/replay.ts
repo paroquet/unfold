@@ -7,7 +7,7 @@ import type { FileChange, Hunk } from './diff.js'
 import type { Plan } from './plan.js'
 
 export interface ReplayResult {
-  /** 逐章的 commit sha，顺序与 plan.chapters 一致 */
+  /** 逐个**有内容**的章的 commit sha，按 plan.chapters 顺序；空章不产 commit，不占位 */
   commits: string[]
   /** 最后一章的 commit，即叙事分支 tip */
   tip: string
@@ -41,6 +41,10 @@ export async function replay(
     let parent = plan.base
 
     for (const chapter of plan.chapters) {
+      // 册里可能有 20 章而本轮只动了 3 章。没有任何内容的章不产 commit——
+      // 否则叙事分支上会挂一长串空 commit，把真正要读的东西淹掉。
+      if (chapter.hunkIds.length === 0 && chapter.filePaths.length === 0) continue
+
       const chapterHunkIds = new Set(chapter.hunkIds)
       const touched = new Set<string>(chapter.filePaths)
       for (const id of chapter.hunkIds) touched.add(hunkPath(id))

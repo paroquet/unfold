@@ -32,37 +32,40 @@ const SCHEMA = 'https://aka.ms/codetour-schema'
 export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): CodeTour[] {
   const byPath = new Map(changes.map((c) => [c.path, c]))
 
-  return plan.chapters.map((chapter) => {
-    const steps: CodeTourStep[] = []
-    const seen = new Set<string>()
+  return plan.chapters
+    // 空章与删除章没有对应的 commit，生成 tour 只会在 CodeTour 面板里留一排空壳
+    .filter((chapter) => chapter.commitIndex !== null)
+    .map((chapter) => {
+      const steps: CodeTourStep[] = []
+      const seen = new Set<string>()
 
-    for (const id of chapter.hunkIds) {
-      const path = hunkPath(id)
-      const change = byPath.get(path)
-      if (change === undefined) continue
-      seen.add(path)
-      if (change.kind === 'delete') continue
-      const hunk = change.hunks.find((h) => h.id === id)
-      if (hunk === undefined) continue
-      steps.push({
-        file: path,
-        line: Math.max(1, hunk.newStart),
-        description: `${chapter.title} — ${path}`,
-      })
-    }
+      for (const id of chapter.hunkIds) {
+        const path = hunkPath(id)
+        const change = byPath.get(path)
+        if (change === undefined) continue
+        seen.add(path)
+        if (change.kind === 'delete') continue
+        const hunk = change.hunks.find((h) => h.id === id)
+        if (hunk === undefined) continue
+        steps.push({
+          file: path,
+          line: Math.max(1, hunk.newStart),
+          description: `${chapter.title} — ${path}`,
+        })
+      }
 
-    for (const path of chapter.filePaths) {
-      if (seen.has(path)) continue
-      if (byPath.get(path)?.kind === 'delete') continue
-      steps.push({ file: path, line: 1, description: `${chapter.title} — ${path}` })
-    }
+      for (const path of chapter.filePaths) {
+        if (seen.has(path)) continue
+        if (byPath.get(path)?.kind === 'delete') continue
+        steps.push({ file: path, line: 1, description: `${chapter.title} — ${path}` })
+      }
 
-    return {
-      $schema: SCHEMA,
-      title: `${chapter.index}. ${chapter.title}`,
-      description: chapter.intro,
-      ref,
-      steps,
-    }
-  })
+      return {
+        $schema: SCHEMA,
+        title: `${chapter.commitIndex}. ${chapter.title}`,
+        description: chapter.intro,
+        ref,
+        steps,
+      }
+    })
 }
