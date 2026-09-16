@@ -153,7 +153,11 @@ async function main(argv: string[]): Promise<void> {
       worktree: result.worktree,
       branch: result.branch,
       base: result.base,
-      chapters: plan.chapters.map((c) => ({ title: c.title, commitIndex: c.commitIndex })),
+      chapters: plan.chapters.map((c) => ({
+        index: c.index,
+        title: c.title,
+        commitIndex: c.commitIndex,
+      })),
     }),
   ])
 

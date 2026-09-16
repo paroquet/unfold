@@ -44,9 +44,9 @@ describe('reviewCommands', () => {
     branch: 'unfold/feat-x',
     base: 'abc1234',
     chapters: [
-      { title: '契约', commitIndex: 1 },
-      { title: '核心逻辑', commitIndex: 2 },
-      { title: '测试与文档', commitIndex: 3 },
+      { index: 1, title: '契约', commitIndex: 1 },
+      { index: 2, title: '核心逻辑', commitIndex: 2 },
+      { index: 3, title: '测试与文档', commitIndex: 3 },
     ],
   })
 
@@ -69,8 +69,8 @@ describe('reviewCommands', () => {
       branch: 'unfold/feature-20260916-025752-612-1fd87d',
       base: 'e18ac8f32df4aaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       chapters: [
-        { title: '契约', commitIndex: 1 },
-        { title: '核心逻辑', commitIndex: 2 },
+        { index: 1, title: '契约', commitIndex: 1 },
+        { index: 2, title: '核心逻辑', commitIndex: 2 },
       ],
     })
     for (const line of long) {
@@ -94,9 +94,9 @@ describe('reviewCommands', () => {
       branch: 'unfold/feat-x',
       base: 'abc1234',
       chapters: [
-        { title: '契约', commitIndex: 1 },
-        { title: '空章', commitIndex: null },
-        { title: '核心逻辑', commitIndex: 2 },
+        { index: 1, title: '契约', commitIndex: 1 },
+        { index: 2, title: '空章', commitIndex: null },
+        { index: 3, title: '核心逻辑', commitIndex: 2 },
       ],
     })
     expect(withGaps.some((l) => l.includes('空章'))).toBe(false)
@@ -107,6 +107,23 @@ describe('reviewCommands', () => {
     expect(
       withGaps.some((l) => /show unfold\/feat-x(\s|$)/.test(l) && l.includes('核心逻辑')),
     ).toBe(true)
+  })
+
+  it('章号打的是册内 index，不是 commitIndex，也不是数组下标', () => {
+    // 册里第 2 章是空章（没有 commit），第 3 章的 commitIndex 是 2。
+    // 注释必须说「第 3 章」——CLI 摘要与 tour 面板说的都是这个数。
+    const withGaps = reviewCommands({
+      worktree: '/state/wt',
+      branch: 'unfold/feat-x',
+      base: 'abc1234',
+      chapters: [
+        { index: 1, title: '契约', commitIndex: 1 },
+        { index: 2, title: '空章', commitIndex: null },
+        { index: 3, title: '核心逻辑', commitIndex: 2 },
+      ],
+    })
+    expect(withGaps.some((l) => l.includes('第 3 章 核心逻辑'))).toBe(true)
+    expect(withGaps.some((l) => l.includes('第 2 章 核心逻辑'))).toBe(false)
   })
 })
 

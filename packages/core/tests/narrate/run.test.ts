@@ -418,7 +418,7 @@ describe('narrate 端到端', () => {
     await repo.cleanup()
   })
 
-  it('中间章为纯删除时，tour 文件名跟着 commitIndex 走，不因数组空洞错位（R27 回归）', async () => {
+  it('中间章为纯删除时，tour 文件名跟着册内章号走，不因数组空洞错位（R27 回归）', async () => {
     const repo = await createTempRepo()
     // 三个不同目录、各自成章，保证中间那章（b/y.ts）独立成一个 commit
     await repo.write('a/x.ts', 'export const x = 1\n')
@@ -439,8 +439,8 @@ describe('narrate 端到端', () => {
     const { readdir } = await import('node:fs/promises')
     const files = (await readdir(join(result.reviewRoot, 'tours'))).sort()
 
-    // 中间那章（b/y.ts，commitIndex 2）全是删除，没有任何 step，tour 被跳过——
-    // 不该出现 chapter-002.tour；c/z.ts 那章必须仍用它自己的 commitIndex(3)
+    // 中间那章（b/y.ts，第 2 章）全是删除，没有任何 step，tour 被跳过——
+    // 不该出现 chapter-002.tour；c/z.ts 那章必须仍用它自己的册内章号（3）
     // 命名，不能因为前面空出一个位置就被数组下标错位命名成 002
     expect(files).toEqual(['chapter-001.tour', 'chapter-003.tour'])
 
@@ -449,6 +449,50 @@ describe('narrate 端到端', () => {
     ) as { title: string }
     expect(third.title).toContain('3.')
 
+    await repo.cleanup()
+  })
+
+  it('册里有空章时，tour 文件名与标题用册内章号，不用 commitIndex（裁决回归）', async () => {
+    const repo = await createTempRepo()
+    await repo.write('a/x.ts', 'export const x = 1\n')
+    await repo.write('c/z.ts', 'export const z = 1\n')
+    await repo.commit('base')
+    await repo.git('checkout', '-q', '-b', 'feature')
+    await repo.write('a/x.ts', 'export const x = 2\n')
+    await repo.commit('touch a')
+
+    // 第一轮：只有 a/x.ts 有改动，它成为册里的第 1 章
+    const first = await narrate(repo.dir, { defaultBranch: 'main', reuse: true })
+    if (!first.hasChanges) throw new Error('应该有改动')
+
+    // 把 a/x.ts 的改动并进 main：下一轮它不再出现在 diff 里，那一章成空章，
+    // 于是册内 index 与 commitIndex 从此分叉
+    await repo.git('checkout', '-q', 'main')
+    await repo.git('merge', '--ff-only', 'feature')
+    await repo.git('checkout', '-q', 'feature')
+
+    await repo.write('c/z.ts', 'export const z = 2\n')
+    const second = await narrate(repo.dir, { defaultBranch: 'main', reuse: true })
+    if (!second.hasChanges) throw new Error('应该有改动')
+
+    const plan = await readPlan(repo.dir, second.reviewId)
+    const zChapter = plan.chapters.find((c) => c.filePaths.includes('c/z.ts'))
+    // 这两条断言先证明「本轮 index 与 commitIndex 真的不一样」，
+    // 否则下面读文件名的断言两种实现都能过，等于什么都没测
+    expect(zChapter?.index).toBe(2)
+    expect(zChapter?.commitIndex).toBe(1)
+
+    const { readdir } = await import('node:fs/promises')
+    const files = await readdir(join(second.reviewRoot, 'tours'))
+    expect(files).toContain('chapter-002.tour')
+
+    const tour = JSON.parse(
+      await readFile(join(second.reviewRoot, 'tours', 'chapter-002.tour'), 'utf8'),
+    ) as { title: string }
+    expect(tour.title.startsWith('2. ')).toBe(true)
+
+    const { cleanReviews } = await import('../../src/state/cleanup.js')
+    await cleanReviews(repo.dir)
     await repo.cleanup()
   })
 })

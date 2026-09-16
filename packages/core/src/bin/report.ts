@@ -15,7 +15,8 @@ export interface ReviewCommandsInput {
   worktree: string
   branch: string
   base: string
-  chapters: Array<{ title: string; commitIndex: number | null }>
+  /** `index` 是册内章号，打印给人看；`commitIndex` 只用来算 revision */
+  chapters: Array<{ index: number; title: string; commitIndex: number | null }>
 }
 
 /**
@@ -39,11 +40,14 @@ export function reviewCommands(input: ReviewCommandsInput): string[] {
       '章节一览',
     ],
   ]
-  for (const [i, { title, commitIndex }] of chapters.entries()) {
+  for (const { index, title, commitIndex } of chapters) {
     if (commitIndex === null) continue
     const back = total - commitIndex
     const rev = back === 0 ? branch : `${branch}~${back}`
-    entries.push([`git -C ${worktree} show ${rev}`, `第 ${i + 1} 章 ${title}`])
+    // 章号打册内 index，不打 commitIndex、也不打数组下标：一切给人看的章号
+    // 统一用 index，否则册里一有 empty / deleted 章，这里、dry-run 摘要与
+    // tour 面板就会各说一个数
+    entries.push([`git -C ${worktree} show ${rev}`, `第 ${index} 章 ${title}`])
   }
 
   // 对齐用 padEnd，但**至少留两个空格**：真实的状态目录路径动辄上百字符，

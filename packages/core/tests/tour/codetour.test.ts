@@ -110,22 +110,44 @@ describe('toCodeTours', () => {
     ])
   })
 
-  it('空章不生成 tour', () => {
+  it('空章不生成 tour——空章照样可以有 filePaths，钉住的是 commitIndex === null 这条过滤', () => {
+    // 空章的 filePaths 必须**非空**：留空的话，就算删掉
+    // `commitIndex !== null` 那条过滤，末尾的 `steps.length > 0` 也会把它丢掉，
+    // 用例照样绿——那正是这条用例此前测不出任何东西的原因。
     const p: Plan = {
       version: 1, rulesFingerprint: 'f', base: 'b', snapshot: 's', plannerId: 'test',
       chapters: [
         { index: 1, commitIndex: null, key: 'empty', title: '空章', intro: '',
-          status: 'empty', keyRenamedFrom: null, hunkIds: [], filePaths: [] },
+          status: 'empty', keyRenamedFrom: null, hunkIds: [], filePaths: ['stale.ts'] },
         { index: 2, commitIndex: 1, key: 'a.ts', title: 'a', intro: '',
           status: 'active', keyRenamedFrom: null, hunkIds: [], filePaths: ['a.ts'] },
       ],
     }
     const tours = toCodeTours(p, [], 'unfold/x')
     expect(tours).toHaveLength(1)
-    expect(tours[0]?.tour.title).toContain('1.')
+    expect(tours[0]?.tour.title).toBe('2. a')
   })
 
-  it('中间的纯删除章被跳过时，后面的 tour 仍带着自己的 commitIndex', () => {
+  it('章号一律用册内 index，不用 commitIndex——册里一有空章两者就分叉', () => {
+    // 册里有一个空章时，commitIndex 比 index 少 1。裁决：给人看的章号
+    // 统一用 index，CLI 摘要、git show 注释与 tour 面板才会说同一个数。
+    const p: Plan = {
+      version: 1, rulesFingerprint: 'f', base: 'b', snapshot: 's', plannerId: 'test',
+      chapters: [
+        { index: 1, commitIndex: null, key: 'a.ts', title: '空章', intro: '',
+          status: 'empty', keyRenamedFrom: null, hunkIds: [], filePaths: [] },
+        { index: 2, commitIndex: 1, key: 'b.ts', title: 'b', intro: '',
+          status: 'active', keyRenamedFrom: null, hunkIds: [], filePaths: ['b.ts'] },
+        { index: 3, commitIndex: 2, key: 'c.ts', title: 'c', intro: '',
+          status: 'active', keyRenamedFrom: null, hunkIds: [], filePaths: ['c.ts'] },
+      ],
+    }
+    const tours = toCodeTours(p, [], 'unfold/x')
+    expect(tours.map((t) => t.index)).toEqual([2, 3])
+    expect(tours.map((t) => t.tour.title)).toEqual(['2. b', '3. c'])
+  })
+
+  it('中间的纯删除章被跳过时，后面的 tour 仍带着自己的册内章号，不被数组空洞错位', () => {
     const del: FileChange = {
       path: 'gone.ts', kind: 'delete', binary: false, mode: '', blob: null,
       oldMode: '100644', oldBlob: 'o', hunks: [],
@@ -147,7 +169,7 @@ describe('toCodeTours', () => {
       ],
     }
     const tours = toCodeTours(p, [del, keep], 'unfold/x')
-    expect(tours.map((t) => t.commitIndex)).toEqual([1, 3])
+    expect(tours.map((t) => t.index)).toEqual([1, 3])
     expect(tours[1]?.tour.title).toContain('3.')
   })
 })

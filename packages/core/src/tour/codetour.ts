@@ -18,11 +18,20 @@ export interface CodeTour {
 
 export interface ChapterTour {
   /**
-   * 该 tour 对应的 commit 序号。**必须由它决定文件名**——tour 数组会因为
-   * 「纯删除章没有任何 step」而出现空洞，用数组下标命名会让文件名、tour 标题
-   * 和 git log 三者对不上，而且只在中间章恰好是纯删除章时才发作。
+   * 该 tour 对应的**册内章号**（`Chapter.index`）。**必须由它决定文件名**。
+   *
+   * 两件事都别拿它当别的：
+   * - 不是数组下标。tour 数组会因为「纯删除章没有任何 step」而出现空洞，
+   *   用下标命名会让文件名、tour 标题和册三者对不上，而且只在中间章
+   *   恰好是纯删除章时才发作。
+   * - 不是 commit 序号。册里一旦有 empty / deleted 章，`index` 与
+   *   `commitIndex` 就会分叉，CLI 说「第 7 章」而 tour 面板说「3.」。
+   *   裁决：**一切给人看的章号一律用册内 index**。tour 编号因此会出现
+   *   空洞（chapter-001、chapter-007），那是诚实的——它在说「第 2 章
+   *   这一轮没有内容」。指向真实 commit 的线索由 tour 的 `ref` 与 CLI
+   *   打印的 `git show` 行承担，不由编号承担。
    */
-  commitIndex: number
+  index: number
   tour: CodeTour
 }
 
@@ -43,10 +52,11 @@ export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): Cha
   const byPath = new Map(changes.map((c) => [c.path, c]))
 
   return plan.chapters
-    // 先按 commitIndex 剔掉没有对应 commit 的空章/删除章——它们连标题里的
-    // 章号都没有。再按实际产出的 step 数筛一遍：一个章可能真有 commitIndex，
-    // 但如果全部内容都是被删除的文件（下面的 step 收集会把它们统统丢掉），
-    // 剩下的仍是一个 "steps": [] 的空壳，同样不该生成 tour。
+    // 先按 commitIndex 剔掉没有对应 commit 的空章/删除章——本轮它们没有任何
+    // 内容可讲，tour 里会是一页空白。再按实际产出的 step 数筛一遍：一个章可能
+    // 真有 commitIndex，但如果全部内容都是被删除的文件（下面的 step 收集会把
+    // 它们统统丢掉），剩下的仍是一个 "steps": [] 的空壳，同样不该生成 tour。
+    // （编号用的是 chapter.index，与这条过滤无关——见 ChapterTour 的注释。）
     .filter((chapter) => chapter.commitIndex !== null)
     .map((chapter) => {
       const steps: CodeTourStep[] = []
@@ -74,10 +84,10 @@ export function toCodeTours(plan: Plan, changes: FileChange[], ref: string): Cha
       }
 
       return {
-        commitIndex: chapter.commitIndex as number,
+        index: chapter.index,
         tour: {
           $schema: SCHEMA,
-          title: `${chapter.commitIndex}. ${chapter.title}`,
+          title: `${chapter.index}. ${chapter.title}`,
           description: chapter.intro,
           ref,
           steps,

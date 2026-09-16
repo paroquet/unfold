@@ -503,11 +503,12 @@ export async function narrate(
   await writeRegistry(root, registry)
   await writeAnnotations(root, { version: 1, snapshot: p.snapshotCommit, annotations })
 
-  // 文件名必须跟着 commitIndex 走，不能跟着数组下标走——纯删除章会让 tour
-  // 数组出现空洞（有 commitIndex 却没有任何 step，见 codetour.ts 的过滤），
-  // 用下标命名会让文件名、tour 标题与 git log 三者对不上。
-  for (const { commitIndex, tour } of toCodeTours(plan, changes, narrativeBranch)) {
-    const name = `chapter-${String(commitIndex).padStart(3, '0')}.tour`
+  // 文件名跟着**册内章号**（Chapter.index）走，不跟数组下标、也不跟 commitIndex：
+  // 下标会因为「纯删除章没有 step」留下的空洞而错位；commitIndex 则会在册里
+  // 有 empty / deleted 章时与 CLI 打印的章号分叉（CLI 说第 7 章、tour 面板说 3.）。
+  // 编号出现空洞是诚实的——它在说「第 2 章这一轮没有内容」。
+  for (const { index, tour } of toCodeTours(plan, changes, narrativeBranch)) {
+    const name = `chapter-${String(index).padStart(3, '0')}.tour`
     await writeFile(join(root, 'tours', name), `${JSON.stringify(tour, null, 2)}\n`, 'utf8')
   }
 
