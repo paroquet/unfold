@@ -1,40 +1,31 @@
 import type { FileChange } from './diff.js'
 import type { NarrativeRules } from './rules.js'
+import type { ChapterStatus, Registry } from './registry.js'
 
 export interface Chapter {
-  /** 从 1 起，连续 */
+  /** 册内序号，从 1 起连续（含 empty 与 deleted 章） */
   index: number
   /**
-   * planner 指派的稳定标识，跨轮语义不变（例如 RulePlanner 的 PathClass，
-   * 或兜底章的 'rest'）。`index` 会因为「本轮哪些桶非空」而在轮次间变化，
-   * 不能拿它当跨轮锚点；`key` 才是 applyPreviousAssignment 用来找回
-   * 「同一概念章节」的依据（spec §7.3）。
+   * 本轮 commit 序号，从 1 起连续。**没有任何改动的章为 null**——
+   * 册里可能有 20 章而本轮只动了 3 章，不能产 17 个空 commit。
    */
+  commitIndex: number | null
+  /** 段首文件的 canonical path，跨轮锚点 */
   key: string
   title: string
-  /** 「为什么先看这个」 */
   intro: string
-  /** 本章包含的 hunk id */
+  status: ChapterStatus
+  /** 段首被删导致 key 顺延时的旧 key，供上层迁移批注 */
+  keyRenamedFrom: string | null
   hunkIds: string[]
-  /**
-   * 在本章「最终落地」的文件。语义：该文件的最后一个 hunk 所在章；
-   * 无 hunk 的文件（二进制）也在此声明。每个文件在全局恰好出现一次，
-   * 这条由 validatePlan 的 file-duplicated / file-missing 守住。
-   */
   filePaths: string[]
 }
 
 export interface Plan {
   version: 1
-  /**
-   * 产出本 plan 时所用规则的指纹（rules.ts 的 rulesFingerprint）。
-   * 跨轮稳定只在指纹相同的两轮之间成立——规则变了就是故意要换一种讲法，
-   * 沿用旧归属反而是错的。旧版产物没有这个字段，视为「未知」即不同。
-   */
   rulesFingerprint: string
   base: string
   snapshot: string
-  /** 产出该 plan 的 planner id，便于复现（spec §7.5） */
   plannerId: string
   chapters: Chapter[]
 }
@@ -43,22 +34,30 @@ export interface PlanContext {
   base: string
   snapshot: string
   changes: FileChange[]
-  /** 章节骨架：有哪些层、什么顺序、怎么匹配 */
   rules: NarrativeRules
-  /** 上一轮的 plan，用于跨轮稳定（spec §7.3） */
+  /** 真实路径 → canonical path（测试已规约到实现） */
+  canonical: Map<string, string>
+  /** 本轮更新后的章节册 */
+  registry: Registry
+  /** 归属阶梯第一级：hunkId → 批注所在的章 key */
+  pinned: Map<string, string>
+  /** canonical 单元之间的依赖边，供 chapter-backward-dep 检查 */
+  deps: Map<string, Set<string>>
   previous?: Plan
 }
 
 /**
- * planner 的全部产出：**只回答归属**。
+ * planner 的产出：**只回答增量归属**。
  *
- * 章节骨架（有哪些章、什么顺序、标题是什么）由 rules 决定，装配由 buildPlan
- * 完成——planner 造不出 rules 之外的章节，这是结构性的约束，不是靠 prompt 请求。
+ * 阶梯的前两级（批注钉定、册沿用）由 TS 先算完，直接从 planner 的取值域里
+ * 拿掉——存量归属不容商量，planner 只对本轮新出现的单元表态。
  */
 export interface Assignment {
-  /** 文件路径 → 层 key。每个改动文件都必须有归属，漏了 buildPlan 会抛错 */
-  byLayer: Map<string, string>
-  /** 可选：本轮定制的导语，覆盖 rules 里的静态文案（AI 能写得更贴这次改动） */
+  /** canonical 单元 → 章 key */
+  byChapter: Map<string, string>
+  /** 提议的新章。byChapter 里出现的、册中没有的 key 必须在这里声明 */
+  proposed?: Map<string, { title: string; intro: string }>
+  /** 本轮定制的导语，按章 key 覆盖 */
   intros?: Map<string, string>
 }
 

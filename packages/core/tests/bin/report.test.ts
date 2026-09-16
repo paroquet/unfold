@@ -15,6 +15,9 @@ function ch(key: string, index: number, title: string, filePaths: string[], hunk
     intro: `读 ${title}`,
     hunkIds: Array.from({ length: hunks }, (_, i) => `${filePaths[0] ?? 'x'}#${i}`),
     filePaths,
+    commitIndex: index,
+    status: 'active',
+    keyRenamedFrom: null,
   }
 }
 const PLAN: Plan = {

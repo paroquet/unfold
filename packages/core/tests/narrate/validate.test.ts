@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { validatePlan } from '../../src/narrate/validate.js'
-import type { Plan, PlanContext } from '../../src/narrate/plan.js'
+import type { Chapter, Plan, PlanContext } from '../../src/narrate/plan.js'
 import type { FileChange } from '../../src/narrate/diff.js'
 import { DEFAULT_RULES, rulesFingerprint } from '../../src/narrate/rules.js'
+import { EMPTY_REGISTRY } from '../../src/narrate/registry.js'
 
 function change(path: string, hunkCount: number): FileChange {
   return {
@@ -20,18 +21,31 @@ function ctx(changes: FileChange[], previous?: Plan): PlanContext {
     snapshot: 'b'.repeat(40),
     changes,
     rules: DEFAULT_RULES,
+    canonical: new Map(),
+    registry: EMPTY_REGISTRY,
+    pinned: new Map(),
+    deps: new Map(),
     ...(previous ? { previous } : {}),
   }
 }
 
-function plan(chapters: Plan['chapters']): Plan {
+// 这批用例测的是 hunk/file 覆盖与跨轮漂移，不碰 commitIndex/status/
+// keyRenamedFrom——统一补成「有内容」的形态，只为了让类型过得去
+type ChapterInput = Omit<Chapter, 'commitIndex' | 'status' | 'keyRenamedFrom'>
+
+function plan(chapters: ChapterInput[]): Plan {
   return {
     version: 1,
     base: 'a'.repeat(40),
     snapshot: 'b'.repeat(40),
     plannerId: 'test',
     rulesFingerprint: rulesFingerprint(DEFAULT_RULES),
-    chapters,
+    chapters: chapters.map((c) => ({
+      ...c,
+      commitIndex: c.index,
+      status: 'active' as const,
+      keyRenamedFrom: null,
+    })),
   }
 }
 

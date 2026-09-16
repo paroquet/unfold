@@ -96,8 +96,8 @@ describe('replay', () => {
       plannerId: 'manual',
       rulesFingerprint: 'test',
       chapters: [
-        { index: 1, key: 'first-half', title: '前半', intro: 'i', hunkIds: [file.hunks[0]!.id], filePaths: [] },
-        { index: 2, key: 'second-half', title: '后半', intro: 'i', hunkIds: [file.hunks[1]!.id], filePaths: ['src/engine.ts'] },
+        { index: 1, commitIndex: 1, status: 'active' as const, keyRenamedFrom: null, key: 'first-half', title: '前半', intro: 'i', hunkIds: [file.hunks[0]!.id], filePaths: [] },
+        { index: 2, commitIndex: 2, status: 'active' as const, keyRenamedFrom: null, key: 'second-half', title: '后半', intro: 'i', hunkIds: [file.hunks[1]!.id], filePaths: ['src/engine.ts'] },
       ],
     }
 
@@ -142,8 +142,8 @@ describe('replay', () => {
       plannerId: 'manual',
       rulesFingerprint: 'test',
       chapters: [
-        { index: 1, key: 'fix-eol', title: '先修结尾', intro: 'i', hunkIds: [hunk1.id], filePaths: [] },
-        { index: 2, key: 'edit-head', title: '再改开头', intro: 'i', hunkIds: [hunk0.id], filePaths: ['src/engine.ts'] },
+        { index: 1, commitIndex: 1, status: 'active' as const, keyRenamedFrom: null, key: 'fix-eol', title: '先修结尾', intro: 'i', hunkIds: [hunk1.id], filePaths: [] },
+        { index: 2, commitIndex: 2, status: 'active' as const, keyRenamedFrom: null, key: 'edit-head', title: '再改开头', intro: 'i', hunkIds: [hunk0.id], filePaths: ['src/engine.ts'] },
       ],
     }
 

@@ -12,8 +12,8 @@ const change = (path: string, newStart: number): FileChange => ({
 const plan: Plan = {
   version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule', rulesFingerprint: 'test',
   chapters: [
-    { key: 'contract', index: 1, title: '契约', intro: '先看类型。', hunkIds: ['src/types.ts#0'], filePaths: ['src/types.ts'] },
-    { key: 'core', index: 2, title: '核心逻辑', intro: '再看实现。', hunkIds: ['src/engine.ts#0'], filePaths: ['src/engine.ts'] },
+    { key: 'contract', index: 1, commitIndex: 1, status: 'active', keyRenamedFrom: null, title: '契约', intro: '先看类型。', hunkIds: ['src/types.ts#0'], filePaths: ['src/types.ts'] },
+    { key: 'core', index: 2, commitIndex: 2, status: 'active', keyRenamedFrom: null, title: '核心逻辑', intro: '再看实现。', hunkIds: ['src/engine.ts#0'], filePaths: ['src/engine.ts'] },
   ],
 }
 
@@ -35,7 +35,7 @@ describe('toCodeTours', () => {
       path: 'img.bin', kind: 'modify', binary: true, mode: '100644',
       blob: 'b'.repeat(40), oldMode: '100644', oldBlob: 'a'.repeat(40), hunks: [],
     }
-    const p: Plan = { ...plan, chapters: [{ key: 'core', index: 1, title: '核心逻辑', intro: 'x', hunkIds: [], filePaths: ['img.bin'] }] }
+    const p: Plan = { ...plan, chapters: [{ key: 'core', index: 1, commitIndex: 1, status: 'active', keyRenamedFrom: null, title: '核心逻辑', intro: 'x', hunkIds: [], filePaths: ['img.bin'] }] }
     const tours = toCodeTours(p, [binary], 'unfold/rev-1')
     expect(tours[0]!.steps).toEqual([
       { file: 'img.bin', line: 1, description: '核心逻辑 — img.bin' },
@@ -54,8 +54,8 @@ describe('toCodeTours', () => {
     const p: Plan = {
       version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule', rulesFingerprint: 'test',
       chapters: [
-        { key: 'ch1', index: 1, title: '第 1 章', intro: 'intro1', hunkIds: [], filePaths: ['img1.bin'] },
-        { key: 'ch2', index: 2, title: '第 2 章', intro: 'intro2', hunkIds: [], filePaths: ['img2.bin'] },
+        { key: 'ch1', index: 1, commitIndex: 1, status: 'active', keyRenamedFrom: null, title: '第 1 章', intro: 'intro1', hunkIds: [], filePaths: ['img1.bin'] },
+        { key: 'ch2', index: 2, commitIndex: 2, status: 'active', keyRenamedFrom: null, title: '第 2 章', intro: 'intro2', hunkIds: [], filePaths: ['img2.bin'] },
       ],
     }
     const tours = toCodeTours(p, [binary1, binary2], 'unfold/rev-1')
@@ -78,7 +78,7 @@ describe('toCodeTours', () => {
       version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule', rulesFingerprint: 'test',
       chapters: [
         {
-          key: 'core', index: 1, title: '核心逻辑', intro: 'x',
+          key: 'core', index: 1, commitIndex: 1, status: 'active', keyRenamedFrom: null, title: '核心逻辑', intro: 'x',
           hunkIds: ['src/gone.ts#0'], filePaths: ['src/gone.ts', 'img.bin'],
         },
       ],
@@ -98,7 +98,7 @@ describe('toCodeTours', () => {
       version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule', rulesFingerprint: 'test',
       chapters: [
         {
-          key: 'core', index: 1, title: '核心逻辑', intro: 'x',
+          key: 'core', index: 1, commitIndex: 1, status: 'active', keyRenamedFrom: null, title: '核心逻辑', intro: 'x',
           hunkIds: ['src/gone.ts#0', 'src/kept.ts#0'],
           filePaths: ['src/gone.ts', 'src/kept.ts'],
         },

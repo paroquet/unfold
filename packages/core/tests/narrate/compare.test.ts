@@ -3,7 +3,10 @@ import { comparePlans } from '../../src/narrate/compare.js'
 import type { Chapter, Plan } from '../../src/narrate/plan.js'
 
 function ch(key: string, index: number, filePaths: string[]): Chapter {
-  return { key, index, title: key, intro: 'i', hunkIds: [], filePaths }
+  return {
+    key, index, title: key, intro: 'i', hunkIds: [], filePaths,
+    commitIndex: index, status: 'active', keyRenamedFrom: null,
+  }
 }
 function plan(chapters: Chapter[]): Plan {
   return {
