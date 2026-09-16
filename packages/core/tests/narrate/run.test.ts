@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createTempRepo } from '../helpers/repo.js'
-import { narrate } from '../../src/narrate/run.js'
+import { narrate, planOnly } from '../../src/narrate/run.js'
 import { newReviewId } from '../../src/state/paths.js'
 
 describe('newReviewId', () => {
@@ -126,6 +126,109 @@ describe('narrate 端到端', () => {
     const { existsSync } = await import('node:fs')
     expect(existsSync(repoStateDir)).toBe(false)
 
+    await repo.cleanup()
+  })
+
+  it('planOnly：算出 plan 就返回，不钉 ref、不建 worktree、不写状态目录', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/types.ts', 'export type T = 1\n')
+    await repo.write('src/engine.ts', 'export const run = () => 1\n')
+    await repo.commit('base')
+    await repo.git('checkout', '-q', '-b', 'feature')
+    await repo.write('src/types.ts', 'export type T = 2\n')
+    await repo.write('src/added.ts', 'export const added = true\n')
+
+    const statusBefore = await repo.git('status', '--porcelain')
+    const result = await planOnly(repo.dir, { defaultBranch: 'main' })
+
+    if (!result.hasChanges) throw new Error('期望算出 plan')
+    expect(result.plan.chapters.length).toBeGreaterThan(0)
+    expect(result.plan.chapters.every((c) => c.key.length > 0)).toBe(true)
+
+    // 什么都不该落地
+    expect(await repo.git('for-each-ref', 'refs/unfold')).toBe('')
+    const worktreeLines = (await repo.git('worktree', 'list', '--porcelain'))
+      .split('\n')
+      .filter((l) => l.startsWith('worktree '))
+    expect(worktreeLines.length).toBe(1) // 只有仓库自己，没有额外注册的叙事 worktree
+    expect(await repo.git('branch', '--list', 'unfold/*')).toBe('')
+    expect(await repo.git('status', '--porcelain')).toBe(statusBefore)
+
+    const { homedir } = await import('node:os')
+    const { repoId } = await import('../../src/state/paths.js')
+    const stateBase = process.env['XDG_STATE_HOME'] ?? join(homedir(), '.local', 'state')
+    const { existsSync } = await import('node:fs')
+    expect(existsSync(join(stateBase, 'unfold', await repoId(repo.dir)))).toBe(false)
+
+    await repo.cleanup()
+  })
+
+  it('--reuse：复用最近一次 review 目录，轮次递增，历轮快照都不被覆盖', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/types.ts', 'export type T = 1\n')
+    await repo.write('src/engine.ts', 'export const run = () => 1\n')
+    await repo.commit('base')
+    await repo.git('checkout', '-q', '-b', 'feature')
+    await repo.write('src/types.ts', 'export type T = 2\n')
+
+    const first = await narrate(repo.dir, { defaultBranch: 'main' })
+    if (!first.hasChanges) throw new Error('期望第一轮有改动')
+
+    await repo.write('src/engine.ts', 'export const run = () => 2\n')
+    const second = await narrate(repo.dir, { defaultBranch: 'main', reuse: true })
+    if (!second.hasChanges) throw new Error('期望第二轮有改动')
+
+    // 同一个 review：id、目录、叙事分支都不变
+    expect(second.reviewId).toBe(first.reviewId)
+    expect(second.reviewRoot).toBe(first.reviewRoot)
+    expect(second.branch).toBe(first.branch)
+
+    // 轮次递增，两轮快照各有自己的 ref
+    const refs = (await repo.git('for-each-ref', '--format=%(refname)', 'refs/unfold'))
+      .split('\n')
+      .sort()
+    expect(refs).toEqual([
+      `refs/unfold/${first.reviewId}/round-001`,
+      `refs/unfold/${first.reviewId}/round-002`,
+    ])
+
+    // 两轮快照都扛得过激进 gc —— 第一轮没有被第二轮覆盖掉
+    await repo.git('reflog', 'expire', '--expire=now', '--all')
+    await repo.git('gc', '--prune=now', '-q')
+    expect(await repo.git('cat-file', '-t', first.snapshot)).toBe('commit')
+    expect(await repo.git('cat-file', '-t', second.snapshot)).toBe('commit')
+
+    // 没有堆出第二个 review 目录，也没有注册第二个 worktree
+    const { listReviews } = await import('../../src/state/reviews.js')
+    expect((await listReviews(repo.dir)).length).toBe(1)
+    const worktreeLines = (await repo.git('worktree', 'list', '--porcelain'))
+      .split('\n')
+      .filter((l) => l.startsWith('worktree '))
+    expect(worktreeLines.length).toBe(2)
+
+    // 叙事分支指向第二轮的 tip，且 worktree 挂在上面
+    expect(await repo.git('rev-parse', second.branch)).toBe(second.tip)
+
+    const { cleanReviews } = await import('../../src/state/cleanup.js')
+    await cleanReviews(repo.dir)
+    await repo.cleanup()
+  })
+
+  it('--reuse 但该仓库还没有任何 review：等同于新建一次', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/a.ts', 'export const a = 1\n')
+    await repo.commit('base')
+    await repo.git('checkout', '-q', '-b', 'feature')
+    await repo.write('src/a.ts', 'export const a = 2\n')
+
+    const result = await narrate(repo.dir, { defaultBranch: 'main', reuse: true })
+    if (!result.hasChanges) throw new Error('期望有改动')
+    expect(await repo.git('for-each-ref', '--format=%(refname)', 'refs/unfold')).toBe(
+      `refs/unfold/${result.reviewId}/round-001`,
+    )
+
+    const { cleanReviews } = await import('../../src/state/cleanup.js')
+    await cleanReviews(repo.dir)
     await repo.cleanup()
   })
 })

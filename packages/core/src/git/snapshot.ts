@@ -81,6 +81,30 @@ export async function pinSnapshot(
   return ref
 }
 
+/**
+ * 该 review 的下一个轮次号：现有 `refs/unfold/<reviewId>/round-NNN` 的最大值 + 1，
+ * 没有任何轮次则为 1。
+ *
+ * 复用同一个 reviewId 时**必须**递增轮次，否则第二轮的 pinSnapshot 会直接
+ * 覆盖第一轮钉住的 ref，让第一轮的快照失去唯一可达引用、下次 gc 即被清除，
+ * 破坏 spec §4.3 的可达性保证。
+ */
+export async function nextRound(repo: string, reviewId: string): Promise<number> {
+  const listed = await git(repo, [
+    'for-each-ref',
+    '--format=%(refname)',
+    `refs/unfold/${reviewId}`,
+  ])
+  if (listed === '') return 1
+  let max = 0
+  for (const ref of listed.split('\n')) {
+    const m = /\/round-(\d+)$/.exec(ref)
+    const n = m?.[1] === undefined ? 0 : Number(m[1])
+    if (Number.isFinite(n) && n > max) max = n
+  }
+  return max + 1
+}
+
 /** 清掉某次 review 钉住的全部快照 ref。 */
 export async function unpinReview(repo: string, reviewId: string): Promise<void> {
   const listed = await git(repo, [

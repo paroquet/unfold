@@ -1,21 +1,33 @@
+import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { git, GitError } from '../git/exec.js'
-import { snapshot, pinSnapshot } from '../git/snapshot.js'
+import { snapshot, pinSnapshot, nextRound } from '../git/snapshot.js'
 import { resolveBase } from '../git/range.js'
 import { addWorktree, attachWorktree } from '../git/worktree.js'
 import { newReviewId, reviewRoot } from '../state/paths.js'
+import { latestReview } from '../state/reviews.js'
 import { computeChanges } from './diff.js'
 import { RulePlanner } from './rule-planner.js'
 import { validatePlan } from './validate.js'
 import { replay } from './replay.js'
 import { verify } from './verify.js'
 import { toCodeTours } from '../tour/codetour.js'
+import type { Plan, PlanContext } from './plan.js'
+import type { FileChange } from './diff.js'
 
 export interface NarrateOptions {
   explicit?: string
   defaultBranch?: string
   now?: Date
+  /**
+   * 复用该仓库最近一次 review 的目录与叙事分支，而不是每次新建。
+   * 轮次自动递增，历轮快照的 ref 各自保留、互不覆盖。
+   *
+   * 反复调参时用它：review 目录路径稳定，VS Code 开着那个窗口不用重开。
+   * 该仓库还没有任何 review 时，等同于新建一次。
+   */
+  reuse?: true
 }
 
 /** 正常情况：工作区相对 base 有改动，产出了叙事分支与全部产物。 */
@@ -44,6 +56,84 @@ export interface NarrateNoChanges {
 
 export type NarrateResult = NarrateChanges | NarrateNoChanges
 
+/**
+ * `planOnly()` 的产出：算出了 plan，但什么都没落地。
+ *
+ * 刻意**不复用** `NarrateResult`：那条 union 的判别式是 `hasChanges`，
+ * 若让 dry-run 也带 `hasChanges: true`，所有既有「只靠 hasChanges 收窄」
+ * 的调用点都会静默拿到一个没有 reviewRoot / tip / worktree 的对象。
+ * 两个函数、两种返回类型，各自只做一件事。
+ */
+export type PlanOnlyResult =
+  | { hasChanges: false; branch: string; base: string }
+  | { hasChanges: true; branch: string; base: string; snapshot: string; plan: Plan }
+
+/** 规划并校验；校验不过即抛错，绝不降级——dry-run 与正式路径共用同一道闸。 */
+async function planAndValidate(ctx: PlanContext): Promise<Plan> {
+  const plan = await new RulePlanner().plan(ctx)
+  const issues = validatePlan(plan, ctx)
+  if (issues.length > 0) {
+    throw new Error(
+      `plan 未通过语义校验：\n${issues.map((i) => `  [${i.code}] ${i.message}`).join('\n')}`,
+    )
+  }
+  return plan
+}
+
+interface Prepared {
+  branch: string
+  base: string
+  baseSource: string
+  snapshotCommit: string
+  changes: FileChange[]
+}
+
+/**
+ * `narrate()` 与 `planOnly()` 的共用前缀：拿到分支名、快照、base 与改动集。
+ * 抽出来是因为这四步必须保持一致——两边各写一遍迟早会漂。
+ */
+async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
+  const branch = await currentBranch(repo)
+  const snap = await snapshot(repo)
+  const baseResolution = await resolveBase(repo, {
+    ...(opts.explicit !== undefined ? { explicit: opts.explicit } : {}),
+    ...(opts.defaultBranch !== undefined ? { defaultBranch: opts.defaultBranch } : {}),
+  })
+  const changes = await computeChanges(repo, baseResolution.base, snap.commit)
+  return {
+    branch,
+    base: baseResolution.base,
+    baseSource: baseResolution.source,
+    snapshotCommit: snap.commit,
+    changes,
+  }
+}
+
+/**
+ * 只算 plan，不产出任何东西：不钉快照 ref、不建 worktree、不 replay、
+ * 不写状态目录。用于反复调参时秒级看「章节会怎么分」。
+ *
+ * 注意它仍会在对象库里留下一个未被引用的快照 commit（与干净工作区
+ * 早退同源），`git gc --prune=now` 可回收。
+ */
+export async function planOnly(
+  repo: string,
+  opts: NarrateOptions = {},
+): Promise<PlanOnlyResult> {
+  const p = await prepare(repo, opts)
+  if (p.changes.length === 0) {
+    return { hasChanges: false, branch: p.branch, base: p.base }
+  }
+  const ctx: PlanContext = { base: p.base, snapshot: p.snapshotCommit, changes: p.changes }
+  return {
+    hasChanges: true,
+    branch: p.branch,
+    base: p.base,
+    snapshot: p.snapshotCommit,
+    plan: await planAndValidate(ctx),
+  }
+}
+
 async function currentBranch(repo: string): Promise<string> {
   try {
     return await git(repo, ['symbolic-ref', '--short', 'HEAD'])
@@ -68,7 +158,8 @@ export async function narrate(
   opts: NarrateOptions = {},
 ): Promise<NarrateResult> {
   const branch = await currentBranch(repo)
-  const reviewId = newReviewId(branch, opts.now)
+  const previous = opts.reuse === true ? await latestReview(repo) : null
+  const reviewId = previous?.reviewId ?? newReviewId(branch, opts.now)
 
   const snap = await snapshot(repo)
 
@@ -82,26 +173,22 @@ export async function narrate(
     return { hasChanges: false, branch, base: baseResolution.base }
   }
 
+  const ctx: PlanContext = { base: baseResolution.base, snapshot: snap.commit, changes }
+
   const root = await reviewRoot(repo, reviewId)
   await mkdir(join(root, 'tours'), { recursive: true })
 
-  // 快照钉 ref，扛得过 gc（spec §4.3）
-  await pinSnapshot(repo, reviewId, 1, snap.commit)
+  // 快照钉 ref，扛得过 gc（spec §4.3）。复用时轮次递增，不覆盖历轮。
+  await pinSnapshot(repo, reviewId, await nextRound(repo, reviewId), snap.commit)
 
-  // 轨道 A：worktree 直接停在终态
+  // 轨道 A：worktree 直接停在终态。复用时它已经注册过了，重复 add 会报错。
   const worktree = join(root, 'worktree')
-  await addWorktree(repo, worktree, snap.commit)
+  if (!existsSync(worktree)) {
+    await addWorktree(repo, worktree, snap.commit)
+  }
 
   // 轨道 B：规划 → 重提交 → 校验
-  const ctx = { base: baseResolution.base, snapshot: snap.commit, changes }
-  const plan = await new RulePlanner().plan(ctx)
-
-  const issues = validatePlan(plan, ctx)
-  if (issues.length > 0) {
-    throw new Error(
-      `plan 未通过语义校验：\n${issues.map((i) => `  [${i.code}] ${i.message}`).join('\n')}`,
-    )
-  }
+  const plan = await planAndValidate(ctx)
 
   const replayed = await replay(repo, plan, changes)
   await verify(repo, replayed.tip, snap.commit)

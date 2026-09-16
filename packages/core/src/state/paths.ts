@@ -41,8 +41,13 @@ export function newReviewId(branch: string, now: Date = new Date()): string {
   return `${slug}-${stamp}-${ms}-${rand}`
 }
 
-/** `~/.local/state/unfold/<repo-id>/<review-id>`（spec §8.1，状态一律在仓库外） */
-export async function reviewRoot(repo: string, reviewId: string): Promise<string> {
+/** `~/.local/state/unfold/<repo-id>`——该仓库全部 review 的容器（spec §8.1，状态一律在仓库外） */
+export async function repoStateDir(repo: string): Promise<string> {
   const base = process.env['XDG_STATE_HOME'] ?? join(homedir(), '.local', 'state')
-  return join(base, 'unfold', await repoId(repo), reviewId)
+  return join(base, 'unfold', await repoId(repo))
+}
+
+/** `~/.local/state/unfold/<repo-id>/<review-id>` */
+export async function reviewRoot(repo: string, reviewId: string): Promise<string> {
+  return join(await repoStateDir(repo), reviewId)
 }
