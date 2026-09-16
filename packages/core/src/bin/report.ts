@@ -1,6 +1,7 @@
 import type { Plan } from '../narrate/plan.js'
 import type { PlanDiff } from '../narrate/compare.js'
-import type { DepGraph } from '../narrate/deps.js'
+import { extOf, languageOf } from '../narrate/deps.js'
+import type { DepGraph, SourceLang } from '../narrate/deps.js'
 import type { ValidationIssue } from '../narrate/validate.js'
 
 /**
@@ -141,28 +142,71 @@ export interface DepEvidenceInput {
   graph: DepGraph
   cycles: string[][]
   suggestion: string[]
+  /** 本轮真实改动的文件数，用来对上「N 个文件 → M 个单元」这笔账 */
+  files: number
 }
 
-/** 依赖扫描的证据：扫了多少、跳过哪些、在哪破的环、建议的顺序。 */
+const LANG_LABEL: Record<SourceLang, string> = { ts: 'TS', kotlin: 'Kotlin' }
+
+/** 按数量降序、同数量按名称升序；超过 3 种时余下的合并成「其他 N」 */
+function byExtension(paths: string[]): string {
+  const counts = new Map<string, number>()
+  for (const path of paths) {
+    const ext = extOf(path) === '' ? '（无扩展名）' : extOf(path)
+    counts.set(ext, (counts.get(ext) ?? 0) + 1)
+  }
+  const sorted = [...counts].sort(
+    (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0),
+  )
+  const head = sorted.slice(0, 3).map(([ext, n]) => `${ext} ${n}`)
+  const rest = sorted.slice(3).reduce((n, [, count]) => n + count, 0)
+  return [...head, ...(rest > 0 ? [`其他 ${rest}`] : [])].join('、')
+}
+
+/**
+ * 依赖扫描的证据：扫了多少、跳过哪些、在哪破的环、建议的顺序（spec §4.6）。
+ *
+ * 数的单位是**单元**不是「源码文件」：扫描的对象是配对之后的 canonical 单元，
+ * 一个单元 = 一个实现 + 配对到它的测试。此前这一行按 `graph.scanned.length`
+ * 报数却写成「个源码文件」——10 个文件的改动会打出「扫描 3 个源码文件｜跳过 4」，
+ * 三个测试文件折进了各自的实现里，两个数字都不含它们，对账时凭空少 3 个文件。
+ * 所以：单位说清楚，再补一行把「文件数 → 单元数」这笔账摊开，让人对得上自己
+ * 这次改了什么。
+ */
 export function formatDepEvidence(input: DepEvidenceInput): string[] {
-  const { graph, cycles, suggestion } = input
+  const { graph, cycles, suggestion, files } = input
   let edges = 0
   for (const targets of graph.edges.values()) edges += targets.size
 
-  const byReason = new Map<string, number>()
+  // 按语言诚实标注（spec §4.6）：扫了 41 个单元，其中 TS 几个、Kotlin 几个
+  const byLang = new Map<string, number>()
+  for (const path of graph.scanned) {
+    const lang = languageOf(path)
+    const label = lang === null ? '其他' : LANG_LABEL[lang]
+    byLang.set(label, (byLang.get(label) ?? 0) + 1)
+  }
+  const langNote =
+    byLang.size === 0 ? '' : `（${[...byLang].map(([l, n]) => `${l} ${n}`).join('、')}）`
+
+  const byReason = new Map<string, string[]>()
   for (const item of graph.skipped) {
-    byReason.set(item.reason, (byReason.get(item.reason) ?? 0) + 1)
+    byReason.set(item.reason, [...(byReason.get(item.reason) ?? []), item.path])
   }
   const skippedNote =
     graph.skipped.length === 0
       ? '无'
-      : `${graph.skipped.length}（` +
-        [...byReason].map(([reason, n]) => `${reason} ${n}`).join('、') +
+      : `${graph.skipped.length} 个（` +
+        [...byReason]
+          .map(([reason, paths]) => `${reason} ${paths.length}：${byExtension(paths)}`)
+          .join('；') +
         '）'
+
+  const units = graph.scanned.length + graph.skipped.length
 
   return [
     '依赖证据',
-    `  扫描   ${graph.scanned.length} 个源码文件｜跳过 ${skippedNote}`,
+    `  扫描   ${graph.scanned.length} 个单元${langNote}｜跳过 ${skippedNote}`,
+    `  单元   本轮 ${files} 个文件 → ${units} 个单元（实现与配对到它的测试算一个）`,
     `  连边   ${edges} 条跨文件依赖`,
     `  破环   ${
       cycles.length === 0

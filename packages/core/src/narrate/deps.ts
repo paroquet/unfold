@@ -9,7 +9,8 @@ export type SourceLang = 'ts' | 'kotlin'
 const TS_EXT = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'])
 const KOTLIN_EXT = new Set(['.kt', '.kts', '.java'])
 
-function extOf(path: string): string {
+/** 路径的扩展名（含点）；没有扩展名返回空串。证据打印按它分桶，故导出。 */
+export function extOf(path: string): string {
   const slash = path.lastIndexOf('/')
   const name = slash < 0 ? path : path.slice(slash + 1)
   const dot = name.lastIndexOf('.')
@@ -75,11 +76,26 @@ export function scanImports(content: string, lang: SourceLang): string[] {
   return found
 }
 
+/** 跳过原因。做成常量是为了让上层（证据打印、测试）跟实现说的是同一句话。 */
+export const SKIP_UNSUPPORTED = '未支持依赖扫描的文件类型'
+export const SKIP_UNREADABLE = '内容不可读'
+export const SKIP_UNPAIRED = '未配对到实现'
+
 export interface DepGraph {
   /** 文件 → 它依赖的文件（都是本轮改动集里的路径） */
   edges: Map<string, Set<string>>
   scanned: string[]
   skipped: Array<{ path: string; reason: string }>
+}
+
+export interface DepGraphOptions {
+  /**
+   * 配对**凭空造出来**的 canonical 路径（`tests/e2e/cli.test.ts` 规约不到任何
+   * 实现时会退回一个并不存在的 `src/e2e/cli.ts`）。它们不是文件，说它们
+   * 「内容不可读（已删除或二进制）」两半都是假的，还会把一个仓库里根本搜不到的
+   * 路径摆到人面前。单列一条原因：未配对到实现。
+   */
+  fabricated?: Set<string>
 }
 
 /** `a/b/../c` → `a/c`，并去掉开头的 `./` */
@@ -143,11 +159,14 @@ function resolveKotlin(spec: string, present: Set<string>): string | null {
  * 建依赖图。**只在 `files` 内部连边**——本轮改动之外的文件不是这次叙事的
  * 一部分，指向它们的 import 不影响章节顺序。
  *
- * `contents` 的值为 `null` 表示内容不可读（文件已删除、或是二进制）。
+ * `contents` 的值为 `null` 表示读不出内容。这有两种完全不同的成因，
+ * 由 `options.fabricated` 区分：真实路径读不出（已删除、二进制、子模块指针）
+ * 记 `内容不可读`；配对凭空造出来的 canonical 路径记 `未配对到实现`。
  */
 export function buildDepGraph(
   files: string[],
   contents: Map<string, string | null>,
+  options: DepGraphOptions = {},
 ): DepGraph {
   const present = new Set(files)
   const edges = new Map<string, Set<string>>(files.map((f) => [f, new Set<string>()]))
@@ -157,12 +176,15 @@ export function buildDepGraph(
   for (const file of files) {
     const lang = languageOf(file)
     if (lang === null) {
-      skipped.push({ path: file, reason: '未支持依赖扫描的文件类型' })
+      skipped.push({ path: file, reason: SKIP_UNSUPPORTED })
       continue
     }
     const content = contents.get(file) ?? null
     if (content === null) {
-      skipped.push({ path: file, reason: '内容不可读（已删除或二进制）' })
+      skipped.push({
+        path: file,
+        reason: options.fabricated?.has(file) === true ? SKIP_UNPAIRED : SKIP_UNREADABLE,
+      })
       continue
     }
     scanned.push(file)

@@ -202,7 +202,13 @@ async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
     )
   }
 
-  const graph = buildDepGraph(units, contents)
+  // 配对规约不到实现时会退回一个**虚构**的 canonical 路径
+  // （`tests/e2e/cli.test.ts` → `src/e2e/cli.ts`，仓库里根本没有这个文件）。
+  // 它既不在快照树里、也不是本轮任何一个真实改动，跟「已删除 / 二进制」
+  // 完全是两回事，证据里必须分开说，否则打出来的是一条假路径 + 一个假原因。
+  const fabricated = new Set(units.filter((u) => !tree.has(u) && !changeOf.has(u)))
+
+  const graph = buildDepGraph(units, contents, { fabricated })
   const { order, cycles } = topoOrder(units, graph.edges, rules.order)
   const segments = segment({
     order,

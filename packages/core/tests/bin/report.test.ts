@@ -262,21 +262,91 @@ describe('formatDepEvidence', () => {
       },
       cycles: [['x.ts', 'y.ts']],
       suggestion: ['src/git'],
+      files: 4,
     }).join('\n')
 
     // 断言真实数字而不是恒存在的字面量「扫描」——那两个字在标题里永远出现，
     // 换成别的同值计数也照样能通过，测不出「数字算对了没有」
-    expect(lines).toContain('扫描   2 个源码文件')
-    expect(lines).toContain('跳过 1')
+    expect(lines).toContain('扫描   2 个单元')
+    expect(lines).toContain('跳过 1 个')
     expect(lines).toContain('未支持依赖扫描的文件类型')
     expect(lines).toContain('连边   1')
     expect(lines).toContain('x.ts')
     expect(lines).toContain('"order": ["src/git"]')
   })
 
+  it('数的是单元不是源码文件，并把「文件数 → 单元数」这笔账摊开', () => {
+    // 10 个文件配对成 3 个扫到 + 4 个跳过 = 7 个单元。此前这行写的是
+    // 「扫描 3 个源码文件｜跳过 4」，折进实现里的 3 个测试文件在两个数字里
+    // 都不出现，人对不上自己这次改了几个文件。
+    const lines = formatDepEvidence({
+      graph: {
+        edges: new Map(),
+        scanned: ['a.ts', 'b.ts', 'c.ts'],
+        skipped: [
+          { path: 'r.md', reason: '未支持依赖扫描的文件类型' },
+          { path: 'p.md', reason: '未支持依赖扫描的文件类型' },
+          { path: 'q.json', reason: '未支持依赖扫描的文件类型' },
+          { path: 'src/e2e/cli.ts', reason: '未配对到实现' },
+        ],
+      },
+      cycles: [],
+      suggestion: [],
+      files: 10,
+    }).join('\n')
+
+    expect(lines).toContain('扫描   3 个单元')
+    expect(lines).not.toContain('个源码文件')
+    expect(lines).toContain('本轮 10 个文件 → 7 个单元')
+  })
+
+  it('按语言标注扫了多少（spec §4.6）', () => {
+    const lines = formatDepEvidence({
+      graph: {
+        edges: new Map(),
+        scanned: ['a.ts', 'b.tsx', 'C.kt'],
+        skipped: [],
+      },
+      cycles: [], suggestion: [], files: 3,
+    }).join('\n')
+    expect(lines).toContain('扫描   3 个单元（TS 2、Kotlin 1）')
+  })
+
+  it('跳过按原因分组，每组再按扩展名拆开（spec §4.6）', () => {
+    const lines = formatDepEvidence({
+      graph: {
+        edges: new Map(),
+        scanned: [],
+        skipped: [
+          { path: 'a.md', reason: '未支持依赖扫描的文件类型' },
+          { path: 'b.md', reason: '未支持依赖扫描的文件类型' },
+          { path: 'c.json', reason: '未支持依赖扫描的文件类型' },
+          { path: 'src/gone.ts', reason: '内容不可读' },
+        ],
+      },
+      cycles: [], suggestion: [], files: 4,
+    }).join('\n')
+    expect(lines).toContain('跳过 4 个（未支持依赖扫描的文件类型 3：.md 2、.json 1；内容不可读 1：.ts 1）')
+  })
+
+  it('扩展名种类超过 3 种时余下的合并成「其他 N」，不把一整屏扩展名摊在人脸上', () => {
+    const lines = formatDepEvidence({
+      graph: {
+        edges: new Map(),
+        scanned: [],
+        skipped: ['a.md', 'b.json', 'c.yaml', 'd.png', 'e.ico', 'LICENSE'].map((path) => ({
+          path, reason: '未支持依赖扫描的文件类型',
+        })),
+      },
+      cycles: [], suggestion: [], files: 6,
+    }).join('\n')
+    expect(lines).toContain('其他 3')
+  })
+
   it('无环时明说「无强连通分量」，而不是留空', () => {
     const lines = formatDepEvidence({
-      graph: { edges: new Map(), scanned: [], skipped: [] }, cycles: [], suggestion: [],
+      graph: { edges: new Map(), scanned: [], skipped: [] },
+      cycles: [], suggestion: [], files: 0,
     }).join('\n')
     expect(lines).toContain('无强连通分量')
     // 没有跳过任何文件时明说「无」，不要留一个「跳过 0（）」这种空括号

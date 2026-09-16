@@ -5,6 +5,7 @@ import { comparePlans } from '../narrate/compare.js'
 import { cleanReviews } from '../state/cleanup.js'
 import { readPlan } from '../state/reviews.js'
 import { parseArgs } from './args.js'
+import type { Plan } from '../narrate/plan.js'
 import {
   editorCommand,
   formatDepEvidence,
@@ -38,6 +39,15 @@ function usage(): never {
     ].join('\n'),
   )
   process.exit(2)
+}
+
+/**
+ * 本轮改动的真实文件数。从 plan 里数而不是另取一份 changes：校验保证每个
+ * 文件恰好落在一章里（file-missing / file-duplicated 都是硬闸），所以这个
+ * 和就是改动集的大小，且与打印出来的章节明细同源，不会各说一个数。
+ */
+function countFiles(plan: Plan): number {
+  return plan.chapters.reduce((n, c) => n + c.filePaths.length, 0)
 }
 
 function out(lines: string[]): void {
@@ -106,6 +116,7 @@ async function main(argv: string[]): Promise<void> {
         graph: result.depGraph,
         cycles: result.cycles,
         suggestion: suggestOrder(result.plan),
+        files: countFiles(result.plan),
       }),
       ...(warnLines.length > 0 ? ['', ...warnLines] : []),
     ])
@@ -143,6 +154,7 @@ async function main(argv: string[]): Promise<void> {
       graph: result.depGraph,
       cycles: result.cycles,
       suggestion: suggestOrder(plan),
+      files: countFiles(plan),
     }),
     ...(warnLines.length > 0 ? ['', ...warnLines] : []),
     '',

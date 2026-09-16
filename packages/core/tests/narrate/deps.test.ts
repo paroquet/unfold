@@ -77,7 +77,23 @@ describe('buildDepGraph', () => {
     expect(graph.scanned).toEqual([])
     expect(graph.skipped).toEqual([
       { path: 'a.md', reason: '未支持依赖扫描的文件类型' },
-      { path: 'src/gone.ts', reason: '内容不可读（已删除或二进制）' },
+      { path: 'src/gone.ts', reason: '内容不可读' },
+    ])
+  })
+
+  it('配对虚构出来的 canonical 路径记「未配对到实现」，不记「内容不可读」', () => {
+    // tests/e2e/cli.test.ts 规约不到任何实现，退回一个并不存在的 src/e2e/cli.ts。
+    // 它不是一个读不出来的文件，它根本不是文件——说「已删除或二进制」两半都假，
+    // 还把一条仓库里搜不到的路径摆到人面前。
+    const files = ['src/e2e/cli.ts', 'src/gone.ts']
+    const contents = new Map<string, string | null>([
+      ['src/e2e/cli.ts', null],
+      ['src/gone.ts', null],
+    ])
+    const graph = buildDepGraph(files, contents, { fabricated: new Set(['src/e2e/cli.ts']) })
+    expect(graph.skipped).toEqual([
+      { path: 'src/e2e/cli.ts', reason: '未配对到实现' },
+      { path: 'src/gone.ts', reason: '内容不可读' },
     ])
   })
 
