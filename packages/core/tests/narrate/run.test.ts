@@ -251,24 +251,30 @@ describe('narrate 端到端', () => {
     await repo.cleanup()
   })
 
-  it('第二轮复用时，已在册的文件不换章', async () => {
+  it('第二轮复用时，已在册的文件不换章——哪怕新文件在依赖序上排到了它前面', async () => {
     const repo = await createTempRepo()
-    await repo.write('src/a.ts', 'export const a = 1\n')
+    await repo.write('src/b.ts', 'export const b = 1\n')
     await repo.commit('base')
-    await repo.write('src/a.ts', 'export const a = 2\n')
+    await repo.write('src/b.ts', 'export const b = 2\n')
 
+    // 第一轮：只有 b.ts，册里记下「章 src/b.ts」
     const first = await narrate(repo.dir, {})
     if (!first.hasChanges) throw new Error('应该有改动')
     const before = await readPlan(repo.dir, first.reviewId)
 
-    await repo.write('src/z.ts', 'export const z = 1\n')
+    // 第二轮：新增 a.ts。它字典序在前、无依赖，所以本轮重新切段会把段首定成
+    // src/a.ts；册若不生效，b.ts 就会被卷进「章 src/a.ts」，批注随之漂走。
+    await repo.write('src/a.ts', 'export const a = 1\n')
     const second = await narrate(repo.dir, { reuse: true })
     if (!second.hasChanges) throw new Error('应该有改动')
     const after = await readPlan(repo.dir, second.reviewId)
 
     const keyOf = (plan: typeof before, path: string): string | undefined =>
       plan.chapters.find((c) => c.filePaths.includes(path))?.key
-    expect(keyOf(after, 'src/a.ts')).toBe(keyOf(before, 'src/a.ts'))
+
+    expect(keyOf(before, 'src/b.ts')).toBe('src/b.ts')
+    expect(keyOf(after, 'src/b.ts')).toBe('src/b.ts')   // 册沿用：没被卷走
+    expect(keyOf(after, 'src/a.ts')).toBe('src/a.ts')   // 新文件自成新章
     await repo.cleanup()
   })
 

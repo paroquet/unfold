@@ -30,7 +30,14 @@ export const REGISTRY_FILE = 'registry.json'
 
 export interface UpdateInput {
   registry: Registry
-  /** 本轮按依赖序切出来的段。只有**未被册认领**的成员会从这里取 */
+  /**
+   * 本轮按依赖序切出来的段。只有**未被册认领**的成员会从这里取。
+   *
+   * 调用方契约：段成员必须是 `activeUnits` 的子集——两者在 run.ts 里同源于
+   * 本轮改动算出的 units。下面「并入同 key 已有章即置 active」正是靠这条才成立；
+   * 若将来有调用方传入本轮没有改动的单元，那句无条件置 active 就会把一个
+   * 实际没动的章标成 active，需连同改掉。
+   */
   segments: Segment[]
   round: number
   /** 快照里仍然存在的 canonical path */
