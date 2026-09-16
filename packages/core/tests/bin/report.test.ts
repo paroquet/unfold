@@ -22,6 +22,7 @@ const PLAN: Plan = {
   base: 'a'.repeat(40),
   snapshot: 'b'.repeat(40),
   plannerId: 'rule',
+  rulesFingerprint: 'test',
   chapters: [ch('contract', 1, '契约', ['src/types.ts'], 2), ch('core', 2, '核心逻辑', ['src/a.ts', 'src/b.ts'], 3)],
 }
 

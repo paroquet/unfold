@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { validatePlan } from '../../src/narrate/validate.js'
 import type { Plan, PlanContext } from '../../src/narrate/plan.js'
 import type { FileChange } from '../../src/narrate/diff.js'
+import { DEFAULT_RULES, rulesFingerprint } from '../../src/narrate/rules.js'
 
 function change(path: string, hunkCount: number): FileChange {
   return {
@@ -14,11 +15,24 @@ function change(path: string, hunkCount: number): FileChange {
 }
 
 function ctx(changes: FileChange[], previous?: Plan): PlanContext {
-  return { base: 'a'.repeat(40), snapshot: 'b'.repeat(40), changes, ...(previous ? { previous } : {}) }
+  return {
+    base: 'a'.repeat(40),
+    snapshot: 'b'.repeat(40),
+    changes,
+    rules: DEFAULT_RULES,
+    ...(previous ? { previous } : {}),
+  }
 }
 
 function plan(chapters: Plan['chapters']): Plan {
-  return { version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'test', chapters }
+  return {
+    version: 1,
+    base: 'a'.repeat(40),
+    snapshot: 'b'.repeat(40),
+    plannerId: 'test',
+    rulesFingerprint: rulesFingerprint(DEFAULT_RULES),
+    chapters,
+  }
 }
 
 describe('validatePlan', () => {
@@ -53,6 +67,21 @@ describe('validatePlan', () => {
     const c = ctx([change('a.ts', 1)])
     const p = plan([{ key: 'k1', index: 2, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] }])
     expect(validatePlan(p, c).map((i) => i.code)).toContain('chapter-index')
+  })
+
+  it('规则指纹不同时不报漂移——规则变了就是故意换一种讲法', () => {
+    const c0 = change('a.ts', 1)
+    const previous = plan([
+      { key: 'contract', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+    ])
+    // 上一轮是在另一套规则下产出的
+    previous.rulesFingerprint = 'someOtherFingerprint'
+    const moved = plan([
+      { key: 'core', index: 1, title: 't', intro: 'i', hunkIds: ['a.ts#0'], filePaths: ['a.ts'] },
+    ])
+    expect(validatePlan(moved, ctx([c0], previous)).map((i) => i.code)).not.toContain(
+      'cross-round-drift',
+    )
   })
 
   it('index 变了但 key 没变不算漂移（位置序号会随本轮非空的类合法变动）', () => {

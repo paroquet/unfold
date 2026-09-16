@@ -1,3 +1,4 @@
+import { rulesFingerprint } from './rules.js'
 import type { Plan, PlanContext } from './plan.js'
 
 export type ValidationCode =
@@ -66,7 +67,13 @@ export function validatePlan(plan: Plan, ctx: PlanContext): ValidationIssue[] {
     }
   }
 
-  if (ctx.previous !== undefined) {
+  // 跨轮漂移只在**同一套规则**的两轮之间才有意义：规则变了就是故意要换
+  // 一种讲法，这时候报漂移会把「调规则」这件事本身变成不可能。buildPlan
+  // 同样按指纹决定要不要沿用上一轮归属，两处判据必须一致。
+  const sameRules =
+    ctx.previous !== undefined && ctx.previous.rulesFingerprint === rulesFingerprint(ctx.rules)
+
+  if (ctx.previous !== undefined && sameRules) {
     // 按 key 而非 index 比对：index 是位置序号，会随「本轮哪些类非空」
     // 合法变动，拿它判漂移会大量误报
     const before = new Map<string, string>()

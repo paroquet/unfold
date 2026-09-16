@@ -11,6 +11,7 @@ function plan(chapters: Chapter[]): Plan {
     base: 'a'.repeat(40),
     snapshot: 'b'.repeat(40),
     plannerId: 'test',
+  rulesFingerprint: 'test',
     chapters,
   }
 }

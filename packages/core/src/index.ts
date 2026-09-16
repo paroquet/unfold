@@ -6,8 +6,18 @@ export type { BaseResolution, BaseSource } from './git/range.js'
 export { addWorktree, attachWorktree, removeWorktree } from './git/worktree.js'
 export { computeChanges, hunkPath } from './narrate/diff.js'
 export type { FileChange, Hunk, ChangeKind } from './narrate/diff.js'
-export type { Chapter, ChapterPlanner, Plan, PlanContext } from './narrate/plan.js'
-export { RulePlanner, classifyPath, pinToPreviousChapters } from './narrate/rule-planner.js'
+export type { Assignment, Chapter, ChapterPlanner, Plan, PlanContext } from './narrate/plan.js'
+export { RulePlanner } from './narrate/rule-planner.js'
+export { buildPlan } from './narrate/build-plan.js'
+export {
+  DEFAULT_RULES,
+  REPO_RULES_PATH,
+  classifyPath,
+  loadRules,
+  rulesFingerprint,
+  validateRules,
+} from './narrate/rules.js'
+export type { LayerRule, NarrativeRules, LoadRulesOptions } from './narrate/rules.js'
 export { validatePlan } from './narrate/validate.js'
 export type { ValidationIssue, ValidationCode } from './narrate/validate.js'
 export { composeContent } from './narrate/compose.js'

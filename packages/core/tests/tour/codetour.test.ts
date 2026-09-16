@@ -10,7 +10,7 @@ const change = (path: string, newStart: number): FileChange => ({
 })
 
 const plan: Plan = {
-  version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule',
+  version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule', rulesFingerprint: 'test',
   chapters: [
     { key: 'contract', index: 1, title: '契约', intro: '先看类型。', hunkIds: ['src/types.ts#0'], filePaths: ['src/types.ts'] },
     { key: 'core', index: 2, title: '核心逻辑', intro: '再看实现。', hunkIds: ['src/engine.ts#0'], filePaths: ['src/engine.ts'] },
@@ -52,7 +52,7 @@ describe('toCodeTours', () => {
       blob: 'b'.repeat(40), oldMode: '100644', oldBlob: 'a'.repeat(40), hunks: [],
     }
     const p: Plan = {
-      version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule',
+      version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule', rulesFingerprint: 'test',
       chapters: [
         { key: 'ch1', index: 1, title: '第 1 章', intro: 'intro1', hunkIds: [], filePaths: ['img1.bin'] },
         { key: 'ch2', index: 2, title: '第 2 章', intro: 'intro2', hunkIds: [], filePaths: ['img2.bin'] },
@@ -75,7 +75,7 @@ describe('toCodeTours', () => {
       oldMode: '100644', oldBlob: 'a'.repeat(40), hunks: [],
     }
     const p: Plan = {
-      version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule',
+      version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule', rulesFingerprint: 'test',
       chapters: [
         {
           key: 'core', index: 1, title: '核心逻辑', intro: 'x',
@@ -95,7 +95,7 @@ describe('toCodeTours', () => {
     }
     const modified = change('src/kept.ts', 5)
     const p: Plan = {
-      version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule',
+      version: 1, base: 'a'.repeat(40), snapshot: 'b'.repeat(40), plannerId: 'rule', rulesFingerprint: 'test',
       chapters: [
         {
           key: 'core', index: 1, title: '核心逻辑', intro: 'x',

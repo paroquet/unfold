@@ -3,6 +3,8 @@ import { createTempRepo } from '../helpers/repo.js'
 import { computeChanges } from '../../src/narrate/diff.js'
 import type { Hunk } from '../../src/narrate/diff.js'
 import { RulePlanner } from '../../src/narrate/rule-planner.js'
+import { buildPlan } from '../../src/narrate/build-plan.js'
+import { DEFAULT_RULES } from '../../src/narrate/rules.js'
 import { replay } from '../../src/narrate/replay.js'
 import { git } from '../../src/git/exec.js'
 
@@ -21,7 +23,8 @@ describe('replay', () => {
     const head = await repo.commit('work')
 
     const changes = await computeChanges(repo.dir, base, head)
-    const plan = await new RulePlanner().plan({ base, snapshot: head, changes })
+    const planCtx = { base, snapshot: head, changes, rules: DEFAULT_RULES }
+    const plan = buildPlan(planCtx, await new RulePlanner().assign(planCtx), 'rule')
     const result = await replay(repo.dir, plan, changes)
 
     expect(await repo.git('rev-parse', `${result.tip}^{tree}`)).toBe(
@@ -41,7 +44,8 @@ describe('replay', () => {
     const head = await repo.commit('work')
 
     const changes = await computeChanges(repo.dir, base, head)
-    const plan = await new RulePlanner().plan({ base, snapshot: head, changes })
+    const planCtx = { base, snapshot: head, changes, rules: DEFAULT_RULES }
+    const plan = buildPlan(planCtx, await new RulePlanner().assign(planCtx), 'rule')
     const result = await replay(repo.dir, plan, changes)
 
     const first = result.commits[0]!
@@ -59,7 +63,8 @@ describe('replay', () => {
     const head = await repo.commit('delete')
 
     const changes = await computeChanges(repo.dir, base, head)
-    const plan = await new RulePlanner().plan({ base, snapshot: head, changes })
+    const planCtx = { base, snapshot: head, changes, rules: DEFAULT_RULES }
+    const plan = buildPlan(planCtx, await new RulePlanner().assign(planCtx), 'rule')
     const result = await replay(repo.dir, plan, changes)
 
     const files = await repo.git('ls-tree', '-r', '--name-only', result.tip)
@@ -89,6 +94,7 @@ describe('replay', () => {
       base,
       snapshot: head,
       plannerId: 'manual',
+      rulesFingerprint: 'test',
       chapters: [
         { index: 1, key: 'first-half', title: '前半', intro: 'i', hunkIds: [file.hunks[0]!.id], filePaths: [] },
         { index: 2, key: 'second-half', title: '后半', intro: 'i', hunkIds: [file.hunks[1]!.id], filePaths: ['src/engine.ts'] },
@@ -134,6 +140,7 @@ describe('replay', () => {
       base: baseSha,
       snapshot: headSha,
       plannerId: 'manual',
+      rulesFingerprint: 'test',
       chapters: [
         { index: 1, key: 'fix-eol', title: '先修结尾', intro: 'i', hunkIds: [hunk1.id], filePaths: [] },
         { index: 2, key: 'edit-head', title: '再改开头', intro: 'i', hunkIds: [hunk0.id], filePaths: ['src/engine.ts'] },
@@ -164,7 +171,8 @@ describe('replay', () => {
     const head = await repo.commit('work')
 
     const changes = await computeChanges(repo.dir, base, head)
-    const plan = await new RulePlanner().plan({ base, snapshot: head, changes })
+    const planCtx = { base, snapshot: head, changes, rules: DEFAULT_RULES }
+    const plan = buildPlan(planCtx, await new RulePlanner().assign(planCtx), 'rule')
     const result = await replay(repo.dir, plan, changes)
 
     expect(await repo.git('rev-parse', `${result.tip}^{tree}`)).toBe(

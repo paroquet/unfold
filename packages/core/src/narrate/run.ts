@@ -6,20 +6,27 @@ import { snapshot, pinSnapshot, nextRound } from '../git/snapshot.js'
 import { resolveBase } from '../git/range.js'
 import { addWorktree, attachWorktree } from '../git/worktree.js'
 import { newReviewId, reviewRoot } from '../state/paths.js'
-import { latestReview } from '../state/reviews.js'
+import { latestReview, readPlan } from '../state/reviews.js'
 import { computeChanges } from './diff.js'
 import { RulePlanner } from './rule-planner.js'
+import { buildPlan } from './build-plan.js'
+import { loadRules } from './rules.js'
 import { validatePlan } from './validate.js'
 import { replay } from './replay.js'
 import { verify } from './verify.js'
 import { toCodeTours } from '../tour/codetour.js'
-import type { Plan, PlanContext } from './plan.js'
+import type { ChapterPlanner, Plan, PlanContext } from './plan.js'
 import type { FileChange } from './diff.js'
+import type { NarrativeRules } from './rules.js'
 
 export interface NarrateOptions {
   explicit?: string
   defaultBranch?: string
   now?: Date
+  /** `--rules <file>`：临时覆盖仓库内与内置的叙事规则 */
+  rulesPath?: string
+  /** 注入 planner；缺省用确定性的 RulePlanner（Plan 2 从这里接 AiPlanner） */
+  planner?: ChapterPlanner
   /**
    * 复用该仓库最近一次 review 的目录与叙事分支，而不是每次新建。
    * 轮次自动递增，历轮快照的 ref 各自保留、互不覆盖。
@@ -33,6 +40,10 @@ export interface NarrateOptions {
 /** 正常情况：工作区相对 base 有改动，产出了叙事分支与全部产物。 */
 export interface NarrateChanges {
   hasChanges: true
+  /** 本轮所用规则的指纹 */
+  rulesFingerprint: string
+  /** 规则相对上一轮是否变了；没有上一轮时为 false */
+  rulesChanged: boolean
   reviewId: string
   reviewRoot: string
   branch: string
@@ -68,9 +79,12 @@ export type PlanOnlyResult =
   | { hasChanges: false; branch: string; base: string }
   | { hasChanges: true; branch: string; base: string; snapshot: string; plan: Plan }
 
-/** 规划并校验；校验不过即抛错，绝不降级——dry-run 与正式路径共用同一道闸。 */
-async function planAndValidate(ctx: PlanContext): Promise<Plan> {
-  const plan = await new RulePlanner().plan(ctx)
+/**
+ * 规划并校验：planner 只回答归属，buildPlan 负责装配，validatePlan 是最后一道闸。
+ * 校验不过即抛错，绝不降级——dry-run 与正式路径共用这一条。
+ */
+async function planAndValidate(ctx: PlanContext, planner: ChapterPlanner): Promise<Plan> {
+  const plan = buildPlan(ctx, await planner.assign(ctx), planner.id)
   const issues = validatePlan(plan, ctx)
   if (issues.length > 0) {
     throw new Error(
@@ -86,6 +100,7 @@ interface Prepared {
   baseSource: string
   snapshotCommit: string
   changes: FileChange[]
+  rules: NarrativeRules
 }
 
 /**
@@ -94,6 +109,10 @@ interface Prepared {
  */
 async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
   const branch = await currentBranch(repo)
+  const rules = await loadRules({
+    repo,
+    ...(opts.rulesPath !== undefined ? { explicitPath: opts.rulesPath } : {}),
+  })
   const snap = await snapshot(repo)
   const baseResolution = await resolveBase(repo, {
     ...(opts.explicit !== undefined ? { explicit: opts.explicit } : {}),
@@ -106,6 +125,7 @@ async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
     baseSource: baseResolution.source,
     snapshotCommit: snap.commit,
     changes,
+    rules,
   }
 }
 
@@ -124,13 +144,18 @@ export async function planOnly(
   if (p.changes.length === 0) {
     return { hasChanges: false, branch: p.branch, base: p.base }
   }
-  const ctx: PlanContext = { base: p.base, snapshot: p.snapshotCommit, changes: p.changes }
+  const ctx: PlanContext = {
+    base: p.base,
+    snapshot: p.snapshotCommit,
+    changes: p.changes,
+    rules: p.rules,
+  }
   return {
     hasChanges: true,
     branch: p.branch,
     base: p.base,
     snapshot: p.snapshotCommit,
-    plan: await planAndValidate(ctx),
+    plan: await planAndValidate(ctx, opts.planner ?? new RulePlanner()),
   }
 }
 
@@ -157,23 +182,28 @@ export async function narrate(
   repo: string,
   opts: NarrateOptions = {},
 ): Promise<NarrateResult> {
-  const branch = await currentBranch(repo)
   const previous = opts.reuse === true ? await latestReview(repo) : null
+  const p = await prepare(repo, opts)
+  const { branch, rules, changes } = p
   const reviewId = previous?.reviewId ?? newReviewId(branch, opts.now)
-
-  const snap = await snapshot(repo)
-
-  const baseResolution = await resolveBase(repo, {
-    ...(opts.explicit !== undefined ? { explicit: opts.explicit } : {}),
-    ...(opts.defaultBranch !== undefined ? { defaultBranch: opts.defaultBranch } : {}),
-  })
-  const changes = await computeChanges(repo, baseResolution.base, snap.commit)
+  const snap = { commit: p.snapshotCommit }
+  const baseResolution = { base: p.base, source: p.baseSource }
 
   if (changes.length === 0) {
     return { hasChanges: false, branch, base: baseResolution.base }
   }
 
-  const ctx: PlanContext = { base: baseResolution.base, snapshot: snap.commit, changes }
+  // 复用时把上一轮的 plan 带进来，跨轮钉回才真正生效（仅当规则指纹相同）
+  const previousPlan =
+    previous === null ? null : await readPlan(repo, previous.reviewId).catch(() => null)
+
+  const ctx: PlanContext = {
+    base: baseResolution.base,
+    snapshot: snap.commit,
+    changes,
+    rules,
+    ...(previousPlan !== null ? { previous: previousPlan } : {}),
+  }
 
   const root = await reviewRoot(repo, reviewId)
   await mkdir(join(root, 'tours'), { recursive: true })
@@ -188,7 +218,7 @@ export async function narrate(
   }
 
   // 轨道 B：规划 → 重提交 → 校验
-  const plan = await planAndValidate(ctx)
+  const plan = await planAndValidate(ctx, opts.planner ?? new RulePlanner())
 
   const replayed = await replay(repo, plan, changes)
   await verify(repo, replayed.tip, snap.commit)
@@ -225,6 +255,9 @@ export async function narrate(
 
   return {
     hasChanges: true,
+    rulesFingerprint: plan.rulesFingerprint,
+    rulesChanged:
+      previousPlan !== null && previousPlan.rulesFingerprint !== plan.rulesFingerprint,
     reviewId,
     reviewRoot: root,
     branch: narrativeBranch,
