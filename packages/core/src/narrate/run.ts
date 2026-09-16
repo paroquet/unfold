@@ -323,9 +323,34 @@ async function assemble(
     order: p.order,
   })
 
+  // 册可能刚刚把某章的 key 顺延给了剩余成员（registry.ts 的 keyRenamedFrom）。
+  // 批注记的是旧 key，册改名后不跟着改，下一轮 buildPlan 会因为
+  // 「批注把 hunk 钉到了册里不存在的章」而抛错。所以改名一发生就把批注迁过去，
+  // 并用迁移后的批注重算 pinned —— draftCtx 里那份是改名之前算的，还指着旧 key。
+  //
+  // 只迁「旧 key 已经不是任何一章的 key」的那些：keyRenamedFrom 是粘着的历史
+  // 记录，若日后恰好又有新章用回那个路径当 key，照着它迁会把新章的批注抢走。
+  const currentKeys = new Set(registry.chapters.map((c) => c.key))
+  const renamedTo = new Map<string, string>()
+  for (const chapter of registry.chapters) {
+    if (chapter.keyRenamedFrom !== null && !currentKeys.has(chapter.keyRenamedFrom)) {
+      renamedTo.set(chapter.keyRenamedFrom, chapter.key)
+    }
+  }
+  const remapped =
+    renamedTo.size === 0
+      ? annotations
+      : annotations.map((a) => {
+          const moved = a.chapterKey === null ? undefined : renamedTo.get(a.chapterKey)
+          return moved === undefined ? a : { ...a, chapterKey: moved }
+        })
+  const pinnedAfterRename =
+    renamedTo.size === 0 ? pinned : pinnedByAnnotations(remapped, p.changes)
+
   const ctx: PlanContext = {
     ...draftCtx,
     registry,
+    pinned: pinnedAfterRename,
     ...(previousPlan !== null ? { previous: previousPlan } : {}),
   }
 
@@ -339,7 +364,7 @@ async function assemble(
   }
   const warnings = issues.filter((i) => i.severity === 'warn')
 
-  return { plan, warnings, registry, annotations }
+  return { plan, warnings, registry, annotations: remapped }
 }
 
 async function currentBranch(repo: string): Promise<string> {

@@ -94,9 +94,17 @@ export function validatePlan(plan: Plan, ctx: PlanContext): ValidationIssue[] {
     for (const ch of plan.chapters) {
       for (const p of ch.filePaths) after.set(p, ch.key)
     }
+    // 册在 key 文件被删时会把 key 顺延给剩余成员（registry.ts 的 keyRenamedFrom）。
+    // 那是**有意的改名**，不是漂移——成员没有换章，只是这一章换了名字。
+    // 不认这条，任何「删掉某章的 key 文件、同时继续改它的兄弟文件」的普通第二轮
+    // 都会被判成漂移而拒绝出货，而跨轮沿用正是这套册存在的理由。
+    const renamedFrom = new Map<string, string>()
+    for (const ch of plan.chapters) {
+      if (ch.keyRenamedFrom !== null) renamedFrom.set(ch.key, ch.keyRenamedFrom)
+    }
     for (const [p, wasKey] of before) {
       const nowKey = after.get(p)
-      if (nowKey !== undefined && nowKey !== wasKey) {
+      if (nowKey !== undefined && nowKey !== wasKey && renamedFrom.get(nowKey) !== wasKey) {
         issues.push({
           code: 'cross-round-drift',
           severity: 'error',

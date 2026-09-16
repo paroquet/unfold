@@ -278,6 +278,77 @@ describe('narrate 端到端', () => {
     await repo.cleanup()
   })
 
+  it('删掉某章的 key 文件、继续改它的兄弟文件：册顺延 key，不判成漂移，照样出货（C1 回归）', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/b.ts', 'export const b = 1\nexport const c = 0\n')
+    await repo.commit('base')
+
+    // 第一轮：新增 a.ts，b.ts 依赖它 —— 两个文件同章，key = src/a.ts
+    await repo.write('src/a.ts', 'export const a = 1\n')
+    await repo.write('src/b.ts', "import { a } from './a.js'\nexport const b = a\nexport const c = 0\n")
+    const first = await narrate(repo.dir, {})
+    if (!first.hasChanges) throw new Error('应该有改动')
+    const before = await readPlan(repo.dir, first.reviewId)
+    const chapterOne = before.chapters.find((c) => c.filePaths.includes('src/b.ts'))
+    expect(chapterOne?.key).toBe('src/a.ts')
+    expect(chapterOne?.filePaths).toContain('src/a.ts')
+
+    // 第二轮：删掉段首 a.ts，继续改 b.ts。册把 key 顺延给 b.ts——这是改名，
+    // 不是漂移。修之前这里会抛「plan 未通过语义校验：[cross-round-drift]」，
+    // 整轮什么都产不出来，唯一的出路是 --reset-chapters 把整本册扔掉。
+    await repo.rm('src/a.ts')
+    await repo.write('src/b.ts', 'export const b = 1\nexport const c = 9\n')
+    const second = await narrate(repo.dir, { reuse: true })
+    expect(second.hasChanges).toBe(true)
+    if (!second.hasChanges) throw new Error('unreachable')
+
+    const after = await readPlan(repo.dir, second.reviewId)
+    const chapterTwo = after.chapters.find((c) => c.filePaths.includes('src/b.ts'))
+    expect(chapterTwo).toBeDefined()
+    expect(chapterTwo?.key).toBe('src/b.ts')
+    expect(chapterTwo?.keyRenamedFrom).toBe('src/a.ts')
+
+    const { cleanReviews } = await import('../../src/state/cleanup.js')
+    await cleanReviews(repo.dir)
+    await repo.cleanup()
+  })
+
+  it('章改名时批注跟着迁到新 key（I5 回归）——旧 key 已不在册里，不迁下一轮就抛错', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/b.ts', 'export const b = 1\nexport const c = 0\n')
+    await repo.commit('base')
+
+    await repo.write('src/a.ts', 'export const a = 1\n')
+    await repo.write('src/b.ts', "import { a } from './a.js'\nexport const b = a\nexport const c = 0\n")
+    const first = await narrate(repo.dir, {})
+    if (!first.hasChanges) throw new Error('应该有改动')
+
+    // 批注打在**非段首成员** b.ts 上，但记的是这一章当时的 key：src/a.ts
+    const held = await readAnnotations(first.reviewRoot)
+    await writeAnnotations(first.reviewRoot, {
+      ...held,
+      annotations: [{
+        id: 'n1', chapterKey: 'src/a.ts', path: 'src/b.ts', startLine: 1, endLine: 3,
+        anchorHash: 'sha256:x', body: '看这里', state: 'live', round: 1,
+      }],
+    })
+
+    // 第二轮：段首 a.ts 被删，章 key 顺延成 src/b.ts，旧 key 从册里彻底消失。
+    // 批注若不跟着改名，buildPlan 会抛「批注把 hunk … 钉到了册里不存在的章」。
+    await repo.rm('src/a.ts')
+    await repo.write('src/b.ts', 'export const b = 1\nexport const c = 9\n')
+    const second = await narrate(repo.dir, { reuse: true })
+    expect(second.hasChanges).toBe(true)
+
+    const moved = await readAnnotations(first.reviewRoot)
+    expect(moved.annotations[0]?.chapterKey).toBe('src/b.ts')
+    expect(moved.annotations[0]?.body).toBe('看这里')
+
+    const { cleanReviews } = await import('../../src/state/cleanup.js')
+    await cleanReviews(repo.dir)
+    await repo.cleanup()
+  })
+
   it('--reset-chapters 丢册重推，并把批注标成 unanchored', async () => {
     const repo = await createTempRepo()
     await repo.write('src/a.ts', 'export const a = 1\n')

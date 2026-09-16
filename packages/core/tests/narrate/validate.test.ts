@@ -32,7 +32,8 @@ function ctx(changes: FileChange[], previous?: Plan): PlanContext {
 
 // 这批用例测的是 hunk/file 覆盖与跨轮漂移，不碰 commitIndex/status/
 // keyRenamedFrom——统一补成「有内容」的形态，只为了让类型过得去
-type ChapterInput = Omit<Chapter, 'commitIndex' | 'status' | 'keyRenamedFrom'>
+type ChapterInput = Omit<Chapter, 'commitIndex' | 'status' | 'keyRenamedFrom'> &
+  Partial<Pick<Chapter, 'keyRenamedFrom'>>
 
 function plan(chapters: ChapterInput[]): Plan {
   return {
@@ -45,7 +46,7 @@ function plan(chapters: ChapterInput[]): Plan {
       ...c,
       commitIndex: c.index,
       status: 'active' as const,
-      keyRenamedFrom: null,
+      keyRenamedFrom: c.keyRenamedFrom ?? null,
     })),
   }
 }
@@ -129,6 +130,42 @@ describe('validatePlan', () => {
     ])
     const issues = validatePlan(drifted, ctx([c0, c1], previous))
     expect(issues.map((i) => i.code)).toContain('cross-round-drift')
+  })
+
+  it('册把 key 顺延给剩余成员时不算漂移（C1 回归）——成员没换章，只是这一章换了名字', () => {
+    // 上一轮：章 a.ts 装着 [a.ts, b.ts]
+    const previous = plan([
+      { key: 'a.ts', index: 1, title: 't', intro: 'i', hunkIds: [], filePaths: ['a.ts', 'b.ts'] },
+    ])
+    // 本轮：a.ts 被删，册把 key 顺延给 b.ts 并记下 keyRenamedFrom。
+    // b.ts 仍在同一章里，只是那一章改了名——这不是漂移。
+    const renamed = plan([
+      {
+        key: 'b.ts', index: 1, title: 't', intro: 'i',
+        hunkIds: ['b.ts#0'], filePaths: ['b.ts'], keyRenamedFrom: 'a.ts',
+      },
+    ])
+    expect(
+      validatePlan(renamed, ctx([change('b.ts', 1)], previous)).map((i) => i.code),
+    ).not.toContain('cross-round-drift')
+  })
+
+  it('改名豁免只认这一章自己的旧名：换到一个与旧 key 无关的章仍报漂移', () => {
+    // 本轮册里确实发生过一次改名（c.ts 章从 x.ts 顺延而来），但 a.ts 是从
+    // 「a.ts 章」跑到了「c.ts 章」，两者没有改名关系——这条必须仍然报。
+    const previous = plan([
+      { key: 'a.ts', index: 1, title: 't', intro: 'i', hunkIds: [], filePaths: ['a.ts'] },
+      { key: 'x.ts', index: 2, title: 't', intro: 'i', hunkIds: [], filePaths: ['c.ts'] },
+    ])
+    const drifted = plan([
+      {
+        key: 'c.ts', index: 1, title: 't', intro: 'i',
+        hunkIds: ['a.ts#0', 'c.ts#0'], filePaths: ['a.ts', 'c.ts'], keyRenamedFrom: 'x.ts',
+      },
+    ])
+    const issues = validatePlan(drifted, ctx([change('a.ts', 1), change('c.ts', 1)], previous))
+    expect(issues.map((i) => i.code)).toContain('cross-round-drift')
+    expect(issues.find((i) => i.code === 'cross-round-drift')?.message).toContain('a.ts')
   })
 
   it('无 hunk 的文件漏掉会报 file-missing', () => {
