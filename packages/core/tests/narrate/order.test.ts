@@ -52,6 +52,35 @@ describe('topoOrder', () => {
     expect(order).toEqual(['src/git/a.ts', 'src/git/b.ts', 'src/bin/x.ts'])
   })
 
+  it('非源码文件统一排到最后，哪怕字典序在源码之前（spec §4.5）', () => {
+    // README.md 字典序在 src/a.ts 之前。不单开一个桶的话，它就是第 1 章，
+    // 整条叙事从一篇文档讲起。
+    const { order } = topoOrder(
+      ['README.md', 'src/a.ts'],
+      graph({ 'README.md': [], 'src/a.ts': [] }),
+    )
+    expect(order).toEqual(['src/a.ts', 'README.md'])
+  })
+
+  it('非源码桶内部仍按路径字典序', () => {
+    const { order } = topoOrder(
+      ['pnpm-lock.yaml', 'docs/b.md', 'docs/a.md', 'src/z.ts'],
+      graph({ 'pnpm-lock.yaml': [], 'docs/b.md': [], 'docs/a.md': [], 'src/z.ts': [] }),
+    )
+    expect(order).toEqual(['src/z.ts', 'docs/a.md', 'docs/b.md', 'pnpm-lock.yaml'])
+  })
+
+  it('order 前缀也管不到非源码：命中前缀的 .md 仍排在源码之后', () => {
+    // 否则「把 docs 前缀写进 order」会意外把文档整体提到最前，
+    // 而 §4.5 说的是非源码一律最后
+    const { order } = topoOrder(
+      ['docs/x.md', 'src/a.ts'],
+      graph({ 'docs/x.md': [], 'src/a.ts': [] }),
+      ['docs'],
+    )
+    expect(order).toEqual(['src/a.ts', 'docs/x.md'])
+  })
+
   it('未被任何前缀命中的节点排在命中者之后', () => {
     // 命中前缀的是 z/other.ts，字典序却排在 src/git/a.ts 之后，
     // 所以这条只有在桶号真的生效时才成立

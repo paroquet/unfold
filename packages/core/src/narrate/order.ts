@@ -1,3 +1,5 @@
+import { isPairable } from './pair.js'
+
 export interface OrderResult {
   /** 全序：被依赖的在前。同样的输入永远产出同样的顺序 */
   order: string[]
@@ -109,8 +111,20 @@ export function topoOrder(
     }
   }
 
-  /** 该分量落在第几个 order 前缀桶里；没命中的落在最后一个桶 */
+  /**
+   * 该分量落在第几个桶里。桶号从小到大依次是：`prefixes` 里的每个前缀、
+   * 未命中前缀的源码、**非源码**。
+   *
+   * 非源码文件（`.md`/`.json`/锁文件/图片/无扩展名的仓库元数据）单开一个
+   * 最后的桶（spec §4.5）：它们不参与依赖图，一条边都没有，跟源码混在同一个
+   * 桶里就只按字典序排——`README.md` 于是排在 `packages/...` 前面，整条叙事
+   * 从一篇文档讲起。桶内仍按字典序，相对顺序不变。
+   *
+   * 判据复用 `pair.ts` 的 `isPairable`（order 不被任何人 import，引它不成环），
+   * 而不是另起一份扩展名清单——两份清单迟早会漂。
+   */
   const bucketOf = (component: string[]): number => {
+    if (component.every((member) => !isPairable(member))) return prefixes.length + 1
     let best = prefixes.length
     for (const member of component) {
       for (const [i, prefix] of prefixes.entries()) {
