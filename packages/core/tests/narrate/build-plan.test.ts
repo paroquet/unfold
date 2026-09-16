@@ -99,4 +99,38 @@ describe('buildPlan', () => {
 
     expect(plan.chapters[0]?.title).toBe('手写的标题')
   })
+
+  it('册里没认领的新单元，按 planner 的表态归章', () => {
+    const plan = buildPlan(ctx({
+      changes: [change('new.ts', ['new.ts#0'])],
+      canonical: new Map([['new.ts', 'new.ts']]),
+      // 章存在，但成员为空——第二级（册沿用）给不出答案，只能靠第三级
+      registry: registry([{ key: 'new.ts', members: [] }]),
+    }), { byChapter: new Map([['new.ts', 'new.ts']]) }, 'test')
+    expect(plan.chapters[0]?.filePaths).toEqual(['new.ts'])
+    expect(plan.chapters[0]?.hunkIds).toEqual(['new.ts#0'])
+  })
+
+  it('planner 把单元分到册里不存在的章时抛错，并指名是哪一章', () => {
+    expect(() => buildPlan(ctx({
+      changes: [change('new.ts', ['new.ts#0'])],
+      canonical: new Map([['new.ts', 'new.ts']]),
+      registry: registry([{ key: 'a.ts', members: ['a.ts'] }]),
+    }), { byChapter: new Map([['new.ts', '查无此章']]) }, 'test')).toThrow(/查无此章/)
+  })
+
+  it('册里标 active、但本轮 hunk 全被批注钉走时，该章降级为 empty', () => {
+    const plan = buildPlan(ctx({
+      changes: [change('a.ts', ['a.ts#0'])],
+      canonical: new Map([['a.ts', 'a.ts']]),
+      registry: registry([
+        { key: 'a.ts', members: ['a.ts'], status: 'active' },
+        { key: 'note.ts', members: ['note.ts'], status: 'active' },
+      ]),
+      pinned: new Map([['a.ts#0', 'note.ts']]),
+    }), { byChapter: new Map() }, 'test')
+    // 唯一的 hunk 被钉去 note.ts，a.ts 这一章什么都不剩
+    expect(plan.chapters[0]?.status).toBe('empty')
+    expect(plan.chapters[0]?.commitIndex).toBeNull()
+  })
 })

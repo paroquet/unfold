@@ -67,8 +67,14 @@ export function buildPlan(
       hunksByChapter.get(key)?.push(h.id)
       lastChapter = key
     }
-    // 文件在「它最后一个 hunk 所在的章」达到终态；无 hunk 的文件（二进制、
-    // 仅 mode 变更）落在它自己的章。replay 依赖这条，改动它会破坏字节一致。
+    // 文件记在「它最后一个 hunk 所在的章」；无 hunk 的文件（二进制、仅 mode 变更）
+    // 落在它自己的章。
+    //
+    // 这两句对 replay 的分量**不一样**：有 hunk 的文件靠 hunkIds 就会被 replay
+    // 收进 touched，终态由「已应用 hunk 数 == 总数」自行判定（replay.ts:45-56），
+    // filePaths 记在哪一章都不改变最终 tree；**无 hunk 的文件则完全靠 filePaths**
+    // 才会被 replay 看见，记错章它就会出现在错误的 commit 里、或根本不出现。
+    // 字节一致真正依赖的是后半句。
     filesByChapter.get(lastChapter)?.push(change.path)
   }
 
