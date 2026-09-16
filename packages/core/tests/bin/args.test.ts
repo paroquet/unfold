@@ -50,6 +50,55 @@ describe('parseArgs', () => {
     expect(result).toEqual({ ok: false })
   })
 
+  it('--dry-run：只算 plan，不建分支不建 worktree', () => {
+    const result = parseArgs(['narrate', '--dry-run'], CWD)
+    expect(result).toEqual({ ok: true, args: { repo: CWD, dryRun: true } })
+  })
+
+  it('--reuse：复用该仓库最近一次 review 目录', () => {
+    const result = parseArgs(['narrate', '--reuse'], CWD)
+    expect(result).toEqual({ ok: true, args: { repo: CWD, reuse: true } })
+  })
+
+  it('--clean：清理该仓库的历史 review 后退出', () => {
+    const result = parseArgs(['narrate', '--clean'], CWD)
+    expect(result).toEqual({ ok: true, args: { repo: CWD, clean: true } })
+  })
+
+  it('--open：跑完用编辑器打开叙事 worktree', () => {
+    const result = parseArgs(['narrate', '--open'], CWD)
+    expect(result).toEqual({ ok: true, args: { repo: CWD, open: true } })
+  })
+
+  it('--compare <reviewId>：与历史 plan 并排比较', () => {
+    const result = parseArgs(['narrate', '--compare', 'feat-x-20260916-101500-042-a1b2c3'], CWD)
+    expect(result).toEqual({
+      ok: true,
+      args: { repo: CWD, compare: 'feat-x-20260916-101500-042-a1b2c3' },
+    })
+  })
+
+  it('--compare 后面紧跟另一个 flag：判为 usage 错误', () => {
+    const result = parseArgs(['narrate', '--compare', '--open'], CWD)
+    expect(result).toEqual({ ok: false })
+  })
+
+  it('--compare 是最后一个参数，没有值', () => {
+    const result = parseArgs(['narrate', '--compare'], CWD)
+    expect(result).toEqual({ ok: false })
+  })
+
+  it('布尔 flag 与取值 flag 混用', () => {
+    const result = parseArgs(
+      ['narrate', '--repo', '/r', '--dry-run', '--base', 'abc', '--open'],
+      CWD,
+    )
+    expect(result).toEqual({
+      ok: true,
+      args: { repo: '/r', explicit: 'abc', dryRun: true, open: true },
+    })
+  })
+
   it('命令不是 narrate', () => {
     const result = parseArgs(['status'], CWD)
     expect(result).toEqual({ ok: false })

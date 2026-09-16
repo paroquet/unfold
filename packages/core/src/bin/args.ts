@@ -2,6 +2,16 @@ export interface ParsedArgs {
   repo: string
   explicit?: string
   defaultBranch?: string
+  /** 只算到 plan 为止就打印退出：不钉 ref、不建 worktree、不 replay、不写状态目录 */
+  dryRun?: true
+  /** 复用该仓库最近一次 review 目录（轮次递增），而不是每次新建 */
+  reuse?: true
+  /** 清理该仓库的全部 review 目录、worktree 与 refs/unfold/*，然后退出 */
+  clean?: true
+  /** 跑完用编辑器打开叙事 worktree */
+  open?: true
+  /** 与某一次历史 plan 并排比较章节划分；'latest' 表示最近一次 */
+  compare?: string
 }
 
 export type ParseResult = { ok: true; args: ParsedArgs } | { ok: false }
@@ -13,9 +23,12 @@ function isFlagValue(value: string | undefined): value is string {
 
 /**
  * 纯函数：解析 `unfold` 的命令行参数，不做任何 I/O 或 process.exit。
- * 唯一支持的命令是 `narrate`，可选 flag：`--base`、`--default-branch`、`--repo`。
+ * 唯一支持的命令是 `narrate`。
  *
- * 每个 flag 的取值都必须真的是一个值，而不是紧跟着的下一个 flag——
+ * 取值 flag：`--base`、`--default-branch`、`--repo`、`--compare`
+ * 布尔 flag：`--dry-run`、`--reuse`、`--clean`、`--open`
+ *
+ * 每个取值 flag 的值都必须真的是一个值，而不是紧跟着的下一个 flag——
  * 否则 `unfold narrate --base --default-branch` 会把 `'--default-branch'`
  * 当成 base revision 吞下去，一路跑到 git 深处才炸出一坨原始用法 dump。
  */
@@ -26,6 +39,11 @@ export function parseArgs(argv: string[], cwd: string): ParseResult {
   let repo = cwd
   let explicit: string | undefined
   let defaultBranch: string | undefined
+  let compare: string | undefined
+  let dryRun = false
+  let reuse = false
+  let clean = false
+  let open = false
 
   for (let i = 0; i < rest.length; i += 1) {
     const flag = rest[i]
@@ -42,6 +60,18 @@ export function parseArgs(argv: string[], cwd: string): ParseResult {
       if (!isFlagValue(value)) return { ok: false }
       repo = value
       i += 1
+    } else if (flag === '--compare') {
+      if (!isFlagValue(value)) return { ok: false }
+      compare = value
+      i += 1
+    } else if (flag === '--dry-run') {
+      dryRun = true
+    } else if (flag === '--reuse') {
+      reuse = true
+    } else if (flag === '--clean') {
+      clean = true
+    } else if (flag === '--open') {
+      open = true
     } else {
       return { ok: false }
     }
@@ -53,6 +83,11 @@ export function parseArgs(argv: string[], cwd: string): ParseResult {
       repo,
       ...(explicit !== undefined ? { explicit } : {}),
       ...(defaultBranch !== undefined ? { defaultBranch } : {}),
+      ...(compare !== undefined ? { compare } : {}),
+      ...(dryRun ? { dryRun: true as const } : {}),
+      ...(reuse ? { reuse: true as const } : {}),
+      ...(clean ? { clean: true as const } : {}),
+      ...(open ? { open: true as const } : {}),
     },
   }
 }
