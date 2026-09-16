@@ -1336,6 +1336,25 @@ describe('migrateAnchors', () => {
     expect(got).toMatchObject({ startLine: 20, endLine: 24, state: 'live' })
   })
 
+  // 以下三条钉住纯插入的边界。git 对「在 L2 与 L3 之间插两行」实测给出
+  // `@@ -2,0 +3,2 @@`——oldStart 指的是插入点**之前**那一行，不是插入后的位置。
+  // 批注是 20-24 时：oldStart=19 在批注之前，=20 已经插进批注内部，=24 在批注之后。
+
+  it('纯插入落在批注之前时，锚点整体下移', () => {
+    const [got] = migrateAnchors([note()], [change('a.ts', [hunk('a.ts#0', 19, 0, 20, 3)])])
+    expect(got).toMatchObject({ startLine: 23, endLine: 27, state: 'live' })
+  })
+
+  it('纯插入落在批注内部时标 stale，而不是把批注整体下移', () => {
+    const [got] = migrateAnchors([note()], [change('a.ts', [hunk('a.ts#0', 20, 0, 21, 3)])])
+    expect(got?.state).toBe('stale')
+  })
+
+  it('纯插入落在批注之后时，锚点不动', () => {
+    const [got] = migrateAnchors([note()], [change('a.ts', [hunk('a.ts#0', 24, 0, 25, 3)])])
+    expect(got).toMatchObject({ startLine: 20, endLine: 24, state: 'live' })
+  })
+
   it('文件被删除时批注标 orphaned，但不丢弃', () => {
     const [got] = migrateAnchors([note()], [change('a.ts', [], 'delete')])
     expect(got).toMatchObject({ state: 'orphaned' })
@@ -1436,12 +1455,22 @@ export function migrateAnchors(
     const hunks = [...change.hunks].sort((a, b) => a.oldStart - b.oldStart)
     let offset = 0
     for (const h of hunks) {
+      // 纯插入（oldLines === 0）的 oldStart 是**插入点之前那一行**的行号：
+      // 在 L2 与 L3 之间插两行，git 实测给的是 `@@ -2,0 +3,2 @@`。所以它占的
+      // 不是某几行，而是 oldStart 与 oldStart+1 之间的那道缝，判据必须跟着变。
+      //
+      // 用同一套 `oldEnd <= startLine` 会把「插在批注第一行之后」误判成「整段
+      // 都在批注之前」，于是批注被整体下移、却完全没提示——新插进来的代码就这样
+      // 悄悄落进了「已 review」的范围里。这是最坏的一种错：不崩、不报警、结论错。
+      const insertion = h.oldLines === 0
       const oldEnd = h.oldStart + h.oldLines
-      if (oldEnd <= note.startLine) {
+      const before = insertion ? h.oldStart < note.startLine : oldEnd <= note.startLine
+      if (before) {
         offset += h.newLines - h.oldLines
         continue
       }
-      if (h.oldStart <= note.endLine) {
+      const overlaps = insertion ? h.oldStart < note.endLine : h.oldStart <= note.endLine
+      if (overlaps) {
         // 重叠：锚点范围重算成这个 hunk 的新范围
         return {
           ...note,
@@ -1524,6 +1553,9 @@ Expected: PASS（10 个）
 - [ ] **Step 5: 变异验证**
 
 把 `migrateAnchors` 里重叠分支的 `state: 'stale'` 改成 `'live'`，确认对应测试变红。
+再把 `before` / `overlaps` 两处的 `insertion ? … : …` 都换成原来的无差别写法
+（`oldEnd <= note.startLine` 与 `h.oldStart <= note.endLine`），确认
+「纯插入落在批注内部」与「纯插入落在批注之后」两条都变红。
 再把 `pinnedByAnnotations` 里的 `note.id < held.id` 改成恒真（即 `held === undefined || true`），
 确认「两条批注争同一个 hunk」变红：此时两个方向分别得到 `cb` 与 `cb`，而测试断言的是 `ca`。
 都改回来。
