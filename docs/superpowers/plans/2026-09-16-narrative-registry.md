@@ -1461,8 +1461,12 @@ export function migrateAnchors(
  * 归属阶梯的第一级：本轮哪些 hunk 应该回到某条批注所在的章。
  *
  * 传入的 annotations 必须是**迁移之后**的——判据用的是新行号。
- * 多条批注争同一个 hunk 时按 id 字典序定夺：谁赢不重要，
- * 重要的是同样的输入永远给同样的答案，否则章节归属会在两轮之间来回跳。
+ * 多条批注争同一个 hunk 时取 id 字典序最小的那条：谁赢不重要，重要的是
+ * 同样的输入永远给同样的答案，否则章节归属会在两轮之间来回跳。
+ *
+ * 定夺只靠下面那一处 `note.id < held.id`，**不预先排序 annotations**——
+ * 取最小值本来就与遍历顺序无关，先排一遍是多余的一层，还会让人误以为
+ * 确定性来自排序、删掉那处比较也无妨。
  */
 export function pinnedByAnnotations(
   annotations: Annotation[],
@@ -1471,7 +1475,7 @@ export function pinnedByAnnotations(
   const byPath = new Map(changes.map((c) => [c.path, c]))
   const winner = new Map<string, { id: string; chapterKey: string }>()
 
-  for (const note of [...annotations].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+  for (const note of annotations) {
     if (note.state === 'orphaned' || note.chapterKey === null) continue
     const change = byPath.get(note.path)
     if (change === undefined) continue
@@ -1520,8 +1524,12 @@ Expected: PASS（10 个）
 - [ ] **Step 5: 变异验证**
 
 把 `migrateAnchors` 里重叠分支的 `state: 'stale'` 改成 `'live'`，确认对应测试变红。
-再把 `pinnedByAnnotations` 里的 `.sort(...)` 去掉，确认「两条批注争同一个 hunk」变红
-（它正反两种输入顺序各跑一次，正是为了逼出这个）。都改回来。
+再把 `pinnedByAnnotations` 里的 `note.id < held.id` 改成恒真（即 `held === undefined || true`），
+确认「两条批注争同一个 hunk」变红：此时两个方向分别得到 `cb` 与 `cb`，而测试断言的是 `ca`。
+都改回来。
+
+**不要**改成「去掉某个预排序」那种变异——这个函数刻意没有预排序，确定性完全由那一处
+比较承担，那才是唯一值得钉住的地方。
 
 - [ ] **Step 6: Commit**
 
