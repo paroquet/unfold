@@ -290,4 +290,41 @@ describe('章节体检', () => {
     )
     expect(issues.some((i) => i.code === 'chapter-backward-dep')).toBe(false)
   })
+
+  it('纯文档的章不按测试覆盖率评判——那只会变成噪音', () => {
+    const issues = validatePlan(
+      { ...base, chapters: [chapter({ filePaths: ['docs/x.md'] })] },
+      ctx({ changes: [mkChange('docs/x.md')], canonical: new Map([['docs/x.md', 'docs/x.md']]) }),
+    )
+    expect(issues.some((i) => i.code === 'chapter-no-test')).toBe(false)
+    expect(issues.some((i) => i.code === 'chapter-test-only')).toBe(false)
+  })
+
+  it('hunk 在本章、文件却记在后面某章时，本章仍要体检', () => {
+    const h = { id: 'src/a.ts#0', oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [] }
+    const issues = validatePlan(
+      {
+        ...base,
+        chapters: [
+          chapter({ index: 1, commitIndex: 1, key: 'c1', hunkIds: ['src/a.ts#0'], filePaths: [] }),
+          chapter({ index: 2, commitIndex: 2, key: 'c2', hunkIds: [], filePaths: ['src/a.ts'] }),
+        ],
+      },
+      ctx({
+        changes: [{ ...mkChange('src/a.ts'), hunks: [h] }],
+        canonical: new Map([['src/a.ts', 'src/a.ts']]),
+      }),
+    )
+    // 两章都承载了 src/a.ts（一章经 hunk、一章经 filePaths），两章都该报
+    expect(issues.filter((i) => i.code === 'chapter-no-test')).toHaveLength(2)
+  })
+
+  it('commitIndex 不连续用独立的 code，便于与位置错乱区分', () => {
+    const issues = validatePlan(
+      { ...base, chapters: [chapter({ index: 1, commitIndex: 3 })] },
+      ctx({ changes: [] }),
+    )
+    expect(issues.find((i) => i.code === 'chapter-commit-gap')?.severity).toBe('error')
+    expect(issues.some((i) => i.code === 'chapter-index')).toBe(false)
+  })
 })

@@ -1,4 +1,5 @@
 import { rulesFingerprint } from './rules.js'
+import { hunkPath } from './diff.js'
 import type { Plan, PlanContext } from './plan.js'
 
 export type ValidationCode =
@@ -9,6 +10,7 @@ export type ValidationCode =
   | 'file-duplicated'
   | 'file-unknown'
   | 'chapter-index'
+  | 'chapter-commit-gap'
   | 'cross-round-drift'
   | 'chapter-key-duplicated'
   | 'chapter-no-test'
@@ -124,15 +126,40 @@ export function validatePlan(plan: Plan, ctx: PlanContext): ValidationIssue[] {
     expectedCommit += 1
     if (ch.commitIndex !== expectedCommit) {
       issues.push({
-        code: 'chapter-index',
+        code: 'chapter-commit-gap',
         severity: 'error',
         message: `章「${ch.key}」的 commitIndex 是 ${ch.commitIndex}，应为 ${expectedCommit}`,
       })
     }
   }
 
+  /**
+   * 本章实际承载的文件：filePaths 再并上贡献了 hunk 的文件。
+   * 与 replay 的 touched 同义（replay.ts:45-46）——只看 filePaths 会漏掉
+   * 「hunk 在本章、文件却记在后面某章」的情形，那种章照样在讲代码。
+   * 排序是为了让体检 issue 的顺序只取决于 plan，不受 Set 迭代顺序影响。
+   */
+  const filesOf = (ch: Plan['chapters'][number]): string[] => {
+    const set = new Set(ch.filePaths)
+    for (const id of ch.hunkIds) set.add(hunkPath(id))
+    return [...set].sort()
+  }
+
   /** 真实路径被规约到了别的路径 ⇒ 它是测试 */
   const isTest = (path: string): boolean => (ctx.canonical.get(path) ?? path) !== path
+
+  const DOC_EXT = new Set([
+    '.md', '.mdx', '.txt', '.rst', '.adoc',
+    '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.lock',
+  ])
+
+  /** 文档与配置不参与「该不该配测试」的评判——按测试覆盖率去说文档，只会变成噪音 */
+  const isDoc = (path: string): boolean => {
+    const slash = path.lastIndexOf('/')
+    const name = slash < 0 ? path : path.slice(slash + 1)
+    const dot = name.lastIndexOf('.')
+    return dot >= 0 && DOC_EXT.has(name.slice(dot))
+  }
 
   const chapterOfUnit = new Map<string, number>()
   for (const ch of plan.chapters) {
@@ -140,16 +167,20 @@ export function validatePlan(plan: Plan, ctx: PlanContext): ValidationIssue[] {
   }
 
   for (const ch of plan.chapters) {
-    if (ch.status !== 'active' || ch.filePaths.length === 0) continue
+    if (ch.status !== 'active') continue
+    const files = filesOf(ch)
+    if (files.length === 0) continue
 
-    const tests = ch.filePaths.filter(isTest)
-    if (tests.length === 0) {
+    const tests = files.filter(isTest)
+    const impls = files.filter((p) => !isTest(p) && !isDoc(p))
+
+    if (impls.length > 0 && tests.length === 0) {
       issues.push({
         code: 'chapter-no-test',
         severity: 'warn',
-        message: `第 ${ch.index} 章「${ch.title}」有 ${ch.filePaths.length} 个实现文件、0 个测试`,
+        message: `第 ${ch.index} 章「${ch.title}」有 ${impls.length} 个实现文件、0 个测试`,
       })
-    } else if (tests.length === ch.filePaths.length) {
+    } else if (tests.length > 0 && impls.length === 0) {
       issues.push({
         code: 'chapter-test-only',
         severity: 'warn',
@@ -157,19 +188,19 @@ export function validatePlan(plan: Plan, ctx: PlanContext): ValidationIssue[] {
       })
     }
 
-    if (ch.filePaths.length > ctx.rules.maxFiles) {
+    if (files.length > ctx.rules.maxFiles) {
       issues.push({
         code: 'chapter-oversized',
         severity: 'warn',
         message:
-          `第 ${ch.index} 章「${ch.title}」有 ${ch.filePaths.length} 个文件，` +
+          `第 ${ch.index} 章「${ch.title}」有 ${files.length} 个文件，` +
           `超过 maxFiles=${ctx.rules.maxFiles}`,
       })
     }
 
-    for (const p of ch.filePaths) {
+    for (const p of files) {
       const unit = ctx.canonical.get(p) ?? p
-      for (const target of ctx.deps.get(unit) ?? []) {
+      for (const target of [...(ctx.deps.get(unit) ?? [])].sort()) {
         const targetChapter = chapterOfUnit.get(target)
         if (targetChapter !== undefined && targetChapter > ch.index) {
           issues.push({
