@@ -27,6 +27,16 @@ describe('topoOrder', () => {
     expect(order).toEqual(['narrate', 'tour', 'bin'])
   })
 
+  it('分量内部按字典序，而不是 Tarjan 的出栈顺序', () => {
+    // a 与 b 互相依赖。Tarjan 出栈是发现顺序的逆序，这里会得到 ['b','a']；
+    // 没有内部排序的话 cycles 就是 [['b','a']]，跨轮 key 会跟着 Tarjan 的
+    // 遍历细节漂。上一条测试的输入（narrate/tour）出栈恰好已是字典序，
+    // 钉不住这个行为，所以需要这一条。
+    const { order, cycles } = topoOrder(['a', 'b'], graph({ a: ['b'], b: ['a'] }))
+    expect(cycles).toEqual([['a', 'b']])
+    expect(order).toEqual(['a', 'b'])
+  })
+
   it('单点自成分量不算环', () => {
     expect(topoOrder(['a', 'b'], graph({ a: ['b'], b: [] })).cycles).toEqual([])
   })
