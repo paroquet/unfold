@@ -14,6 +14,8 @@ export interface ParsedArgs {
   compare?: string
   /** `--rules <file>`：临时覆盖仓库内与内置的叙事规则 */
   rulesPath?: string
+  /** 丢弃章节册重新推导；批注保留但解除归属 */
+  resetChapters?: true
 }
 
 export type ParseResult = { ok: true; args: ParsedArgs } | { ok: false }
@@ -47,6 +49,7 @@ export function parseArgs(argv: string[], cwd: string): ParseResult {
   let reuse = false
   let clean = false
   let open = false
+  let resetChapters = false
 
   for (let i = 0; i < rest.length; i += 1) {
     const flag = rest[i]
@@ -79,6 +82,8 @@ export function parseArgs(argv: string[], cwd: string): ParseResult {
       clean = true
     } else if (flag === '--open') {
       open = true
+    } else if (flag === '--reset-chapters') {
+      resetChapters = true
     } else {
       return { ok: false }
     }
@@ -96,6 +101,7 @@ export function parseArgs(argv: string[], cwd: string): ParseResult {
       ...(reuse ? { reuse: true as const } : {}),
       ...(clean ? { clean: true as const } : {}),
       ...(open ? { open: true as const } : {}),
+      ...(resetChapters ? { resetChapters: true as const } : {}),
     },
   }
 }

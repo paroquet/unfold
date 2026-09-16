@@ -117,4 +117,9 @@ describe('parseArgs', () => {
     const result = parseArgs([], CWD)
     expect(result).toEqual({ ok: false })
   })
+
+  it('认识 --reset-chapters', () => {
+    const got = parseArgs(['narrate', '--reset-chapters'], '/tmp/x')
+    expect(got.ok && got.args.resetChapters).toBe(true)
+  })
 })

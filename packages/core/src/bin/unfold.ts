@@ -5,7 +5,15 @@ import { comparePlans } from '../narrate/compare.js'
 import { cleanReviews } from '../state/cleanup.js'
 import { readPlan } from '../state/reviews.js'
 import { parseArgs } from './args.js'
-import { editorCommand, formatPlanDiff, formatPlanSummary, reviewCommands } from './report.js'
+import {
+  editorCommand,
+  formatDepEvidence,
+  formatPlanDiff,
+  formatPlanSummary,
+  formatWarnings,
+  reviewCommands,
+  suggestOrder,
+} from './report.js'
 
 function usage(): never {
   process.stderr.write(
@@ -24,6 +32,7 @@ function usage(): never {
       '  --clean                  清掉该仓库全部 review 目录、worktree 与 refs/unfold/*，然后退出',
       '  --compare <id|latest>    与某次历史 plan 并排比较章节划分',
       '  --open                   跑完用 VS Code 打开叙事 worktree',
+      '  --reset-chapters         丢弃章节册重新推导；批注保留但解除归属',
       '',
     ].join('\n'),
   )
@@ -38,8 +47,18 @@ async function main(argv: string[]): Promise<void> {
   const parsed = parseArgs(argv, process.cwd())
   if (!parsed.ok) usage()
 
-  const { repo, explicit, defaultBranch, dryRun, reuse, clean, open, compare, rulesPath } =
-    parsed.args
+  const {
+    repo,
+    explicit,
+    defaultBranch,
+    dryRun,
+    reuse,
+    clean,
+    open,
+    compare,
+    rulesPath,
+    resetChapters,
+  } = parsed.args
 
   if (clean === true) {
     const result = await cleanReviews(repo)
@@ -59,6 +78,7 @@ async function main(argv: string[]): Promise<void> {
     ...(explicit !== undefined ? { explicit } : {}),
     ...(defaultBranch !== undefined ? { defaultBranch } : {}),
     ...(rulesPath !== undefined ? { rulesPath } : {}),
+    ...(resetChapters === true ? { resetChapters: true as const } : {}),
   }
 
   if (dryRun === true) {
@@ -67,6 +87,7 @@ async function main(argv: string[]): Promise<void> {
       out([`没有可讲的改动：${result.branch} 相对 base（${result.base.slice(0, 12)}）没有任何改动。`])
       return
     }
+    const warnLines = formatWarnings(result.warnings)
     out([
       `dry-run（什么都没落地）`,
       `base       ${result.base.slice(0, 12)}`,
@@ -74,6 +95,13 @@ async function main(argv: string[]): Promise<void> {
       `章节       ${result.plan.chapters.length}`,
       '',
       ...formatPlanSummary(result.plan),
+      '',
+      ...formatDepEvidence({
+        graph: result.depGraph,
+        cycles: result.cycles,
+        suggestion: suggestOrder(result.plan),
+      }),
+      ...(warnLines.length > 0 ? ['', ...warnLines] : []),
     ])
     if (baseline !== null) {
       out(['', `与 ${compare} 对比：`, ...formatPlanDiff(comparePlans(baseline, result.plan))])
@@ -100,6 +128,7 @@ async function main(argv: string[]): Promise<void> {
     ])
   }
 
+  const warnLines = formatWarnings(result.warnings)
   out([
     `叙事分支   ${result.branch}（${result.chapters} 章）`,
     `base       ${result.base.slice(0, 12)}`,
@@ -110,12 +139,19 @@ async function main(argv: string[]): Promise<void> {
     '',
     ...formatPlanSummary(plan),
     '',
+    ...formatDepEvidence({
+      graph: result.depGraph,
+      cycles: result.cycles,
+      suggestion: suggestOrder(plan),
+    }),
+    ...(warnLines.length > 0 ? ['', ...warnLines] : []),
+    '',
     '怎么看：',
     ...reviewCommands({
       worktree: result.worktree,
       branch: result.branch,
       base: result.base,
-      chapterTitles: plan.chapters.map((c) => c.title),
+      chapters: plan.chapters.map((c) => ({ title: c.title, commitIndex: c.commitIndex })),
     }),
   ])
 

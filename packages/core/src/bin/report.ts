@@ -1,5 +1,7 @@
 import type { Plan } from '../narrate/plan.js'
 import type { PlanDiff } from '../narrate/compare.js'
+import type { DepGraph } from '../narrate/deps.js'
+import type { ValidationIssue } from '../narrate/validate.js'
 
 /**
  * 打开叙事 worktree 的命令。返回数组而不是自己去 spawn——
@@ -13,19 +15,22 @@ export interface ReviewCommandsInput {
   worktree: string
   branch: string
   base: string
-  chapterTitles: string[]
+  chapters: Array<{ title: string; commitIndex: number | null }>
 }
 
 /**
  * 一组可直接粘的命令，让人不装插件也能读这条叙事。
  *
- * 第 k 章的 commit 是 `<branch>~(N-k)`——叙事分支是一条线性链，
- * 最后一章就是分支 tip。所有 git 命令都带 `-C <worktree>`，
+ * 第 k 个 commit（1 起）对应的 revision 是 `<branch>~(total-k)`——叙事分支
+ * 是一条线性链，最后一个 commit 就是分支 tip。所有 git 命令都带 `-C <worktree>`，
  * 在任意目录下粘贴都成立。
+ *
+ * 空章与删除章没有对应的 commit（`commitIndex` 为 `null`），不生成 `git show`
+ * 行——生成出来是粘贴即报错的命令。
  */
 export function reviewCommands(input: ReviewCommandsInput): string[] {
-  const { worktree, branch, base, chapterTitles } = input
-  const n = chapterTitles.length
+  const { worktree, branch, base, chapters } = input
+  const total = chapters.reduce((n, c) => (c.commitIndex === null ? n : n + 1), 0)
 
   const entries: Array<[command: string, comment: string]> = [
     [editorCommand(worktree).join(' '), '用 VS Code 打开，内置 Source Control 逐章看'],
@@ -34,8 +39,9 @@ export function reviewCommands(input: ReviewCommandsInput): string[] {
       '章节一览',
     ],
   ]
-  for (const [i, title] of chapterTitles.entries()) {
-    const back = n - 1 - i
+  for (const [i, { title, commitIndex }] of chapters.entries()) {
+    if (commitIndex === null) continue
+    const back = total - commitIndex
     const rev = back === 0 ? branch : `${branch}~${back}`
     entries.push([`git -C ${worktree} show ${rev}`, `第 ${i + 1} 章 ${title}`])
   }
@@ -46,10 +52,20 @@ export function reviewCommands(input: ReviewCommandsInput): string[] {
   return entries.map(([command, comment]) => `  ${command.padEnd(width)}  # ${comment}`)
 }
 
-/** dry-run 的输出：逐章列出标题、文件数、hunk 数与具体文件。 */
+/**
+ * dry-run 的输出：逐章列出标题、文件数、hunk 数与具体文件。
+ *
+ * 空章（本轮无改动）与删除章（模块已删除）也列出来——它们仍在册里占着位置，
+ * 不列会让人以为册「变短」了，其实只是这轮没动它。
+ */
 export function formatPlanSummary(plan: Plan): string[] {
   const lines: string[] = []
   for (const chapter of plan.chapters) {
+    if (chapter.commitIndex === null) {
+      const note = chapter.status === 'deleted' ? '模块已删除' : '本轮无改动'
+      lines.push(`  第 ${chapter.index} 章 ${chapter.title}（${note}）`)
+      continue
+    }
     lines.push(
       `  第 ${chapter.index} 章 ${chapter.title}` +
         `（${chapter.filePaths.length} 文件 / ${chapter.hunkIds.length} hunk）`,
@@ -72,4 +88,74 @@ export function formatPlanDiff(diff: PlanDiff): string[] {
   for (const p of diff.added) lines.push(`  新增    ${p}`)
   for (const p of diff.removed) lines.push(`  消失    ${p}`)
   return lines
+}
+
+function dirOf(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash < 0 ? '' : path.slice(0, slash)
+}
+
+/**
+ * 从本轮的章节顺序反推出一行可粘贴的 `order`。
+ *
+ * 给的是**目录前缀**而不是章节 key：key 是切段之后才产生的，
+ * 人预先写不出来，而目录是稳定的、可读的、下一轮仍然认得的。
+ */
+export function suggestOrder(plan: Plan): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const chapter of plan.chapters) {
+    if (chapter.commitIndex === null) continue
+    const dir = dirOf(chapter.key)
+    if (dir === '' || seen.has(dir)) continue
+    seen.add(dir)
+    out.push(dir)
+  }
+  return out
+}
+
+export interface DepEvidenceInput {
+  graph: DepGraph
+  cycles: string[][]
+  suggestion: string[]
+}
+
+/** 依赖扫描的证据：扫了多少、跳过哪些、在哪破的环、建议的顺序。 */
+export function formatDepEvidence(input: DepEvidenceInput): string[] {
+  const { graph, cycles, suggestion } = input
+  let edges = 0
+  for (const targets of graph.edges.values()) edges += targets.size
+
+  const byReason = new Map<string, number>()
+  for (const item of graph.skipped) {
+    byReason.set(item.reason, (byReason.get(item.reason) ?? 0) + 1)
+  }
+  const skippedNote =
+    graph.skipped.length === 0
+      ? '无'
+      : `${graph.skipped.length}（` +
+        [...byReason].map(([reason, n]) => `${reason} ${n}`).join('、') +
+        '）'
+
+  return [
+    '依赖证据',
+    `  扫描   ${graph.scanned.length} 个源码文件｜跳过 ${skippedNote}`,
+    `  连边   ${edges} 条跨文件依赖`,
+    `  破环   ${
+      cycles.length === 0
+        ? '无强连通分量'
+        : cycles.map((c) => `[${c.join(' ↔ ')}]`).join('、')
+    }`,
+    `  建议   "order": ${JSON.stringify(suggestion)}`,
+  ]
+}
+
+/**
+ * 章节体检的提示。只打 `warn`——`error` 已经让整轮抛掉了，
+ * 走到打印这一步的 plan 里不可能还有 error。
+ */
+export function formatWarnings(issues: ValidationIssue[]): string[] {
+  const warnings = issues.filter((i) => i.severity === 'warn')
+  if (warnings.length === 0) return []
+  return ['提示', ...warnings.map((i) => `  ${i.message}`)]
 }
