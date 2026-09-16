@@ -106,7 +106,10 @@ export function suggestOrder(plan: Plan): string[] {
   const out: string[] = []
   for (const chapter of plan.chapters) {
     if (chapter.commitIndex === null) continue
-    const dir = dirOf(chapter.key)
+    // 用真实文件路径而不是 chapter.key：key 是 canonical 路径，纯测试目录的
+    // canonical 指向一个并不存在的实现路径，拿它当目录前缀建议给用户，
+    // 粘进配置就是一条永远匹配不到东西的死规则。
+    const dir = dirOf(chapter.filePaths[0] ?? chapter.key)
     if (dir === '' || seen.has(dir)) continue
     seen.add(dir)
     out.push(dir)

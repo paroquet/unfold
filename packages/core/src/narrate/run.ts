@@ -123,8 +123,22 @@ interface Prepared {
   canonical: Map<string, string>
   /** 去重后的 canonical 单元，供依赖图与切段使用 */
   units: string[]
-  /** 快照树里仍然存在的 canonical 单元 */
+  /**
+   * 供**册**（registry）判断成员存续用：快照树里的全部路径，
+   * 再并上本轮未删除文件的 canonical 单元——即便那个单元本身并不对应
+   * 任何真实文件（配对规约不到实现时会退回一个虚构路径），只要配对它的
+   * 测试文件本身没被删，这个单元就该继续被册认领，不能因为它不是一个
+   * 真实文件就被当成「已删除」清出册。**不要**拿它去判断「这个路径真的
+   * 存在吗」——那件事要用下面的 `tree`。
+   */
   present: Set<string>
+  /**
+   * 快照树里**字面存在**的全部路径（一次 `ls-tree` 的原始结果）。
+   * 供体检判断「测试配对到的实现是否真的能找到」——`present` 不能用在这里，
+   * 它按设计会把配对规约不到实现时虚构出的路径也算进去，那样每一个纯测试
+   * 目录（e2e、测试 helper）都会被判成「实现存在」，体检提示就白加了。
+   */
+  tree: Set<string>
   graph: DepGraph
   order: string[]
   cycles: string[][]
@@ -207,6 +221,7 @@ async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
     canonical,
     units,
     present,
+    tree,
     graph,
     order,
     cycles,
@@ -275,6 +290,9 @@ async function assemble(
     registry: registryBefore,
     pinned,
     deps: p.graph.edges,
+    // 体检要判断的是「这个路径字面上存在吗」，用 p.tree（原始 ls-tree
+    // 结果）；p.present 是给册用的另一个更宽的集合，见 Prepared.present 上的注释。
+    present: p.tree,
   }
   const assignment = await planner.assign(draftCtx)
 

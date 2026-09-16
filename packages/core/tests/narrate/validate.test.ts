@@ -25,6 +25,7 @@ function ctx(changes: FileChange[], previous?: Plan): PlanContext {
     registry: EMPTY_REGISTRY,
     pinned: new Map(),
     deps: new Map(),
+    present: new Set(),
     ...(previous ? { previous } : {}),
   }
 }
@@ -194,7 +195,8 @@ describe('章节体检', () => {
 
   const ctx = (over: Partial<PlanContext>): PlanContext => ({
     base: 'b', snapshot: 's', changes: [], rules: DEFAULT_RULES,
-    canonical: new Map(), registry: EMPTY_REGISTRY, pinned: new Map(), deps: new Map(), ...over,
+    canonical: new Map(), registry: EMPTY_REGISTRY, pinned: new Map(), deps: new Map(),
+    present: new Set(), ...over,
   })
 
   const base = { version: 1 as const, rulesFingerprint: 'f', base: 'b', snapshot: 's', plannerId: 'test' }
@@ -232,15 +234,29 @@ describe('章节体检', () => {
     expect(issues.some((i) => i.severity === 'error')).toBe(false)
   })
 
-  it('只有测试没有实现时报 chapter-test-only', () => {
+  it('只有测试没有实现时报 chapter-test-only（被测实现确实存在于快照里）', () => {
     const issues = validatePlan(
       { ...base, chapters: [chapter({ filePaths: ['tests/a.test.ts'] })] },
       ctx({
         changes: [mkChange('tests/a.test.ts')],
         canonical: new Map([['tests/a.test.ts', 'src/a.ts']]),
+        present: new Set(['src/a.ts']),
       }),
     )
     expect(issues.find((i) => i.code === 'chapter-test-only')?.severity).toBe('warn')
+  })
+
+  it('被测实现在快照里根本不存在（e2e / 测试 helper / 纯测试目录）时不报 chapter-test-only——无处可去的提示是噪音', () => {
+    const issues = validatePlan(
+      { ...base, chapters: [chapter({ filePaths: ['tests/e2e/cli.test.ts'] })] },
+      ctx({
+        changes: [mkChange('tests/e2e/cli.test.ts')],
+        // canonical 把它规约到了 src/e2e/cli.ts，但那个路径并不存在（present 里没有）
+        canonical: new Map([['tests/e2e/cli.test.ts', 'src/e2e/cli.ts']]),
+        present: new Set(),
+      }),
+    )
+    expect(issues.some((i) => i.code === 'chapter-test-only')).toBe(false)
   })
 
   it('超过 maxFiles 报 chapter-oversized', () => {

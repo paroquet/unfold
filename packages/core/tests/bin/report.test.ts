@@ -199,6 +199,19 @@ describe('suggestOrder', () => {
     }
     expect(suggestOrder(plan)).toEqual(['src/bin'])
   })
+
+  it('用真实文件路径而不是 key——纯测试目录的 key 指向一个并不存在的实现路径', () => {
+    const plan = {
+      version: 1 as const, rulesFingerprint: 'f', base: 'b', snapshot: 's', plannerId: 'p',
+      chapters: [
+        // key 被规约成了 src/e2e/cli.ts（并不存在），真实文件在 tests/e2e/ 下
+        { index: 1, commitIndex: 1, key: 'src/e2e/cli.ts', title: 'T', intro: 'I',
+          status: 'active' as const, keyRenamedFrom: null, hunkIds: [],
+          filePaths: ['packages/core/tests/e2e/cli.test.ts'] },
+      ],
+    }
+    expect(suggestOrder(plan)).toEqual(['packages/core/tests/e2e'])
+  })
 })
 
 describe('formatDepEvidence', () => {
@@ -213,7 +226,9 @@ describe('formatDepEvidence', () => {
       suggestion: ['src/git'],
     }).join('\n')
 
-    expect(lines).toContain('扫描')
+    // 断言真实数字而不是恒存在的字面量「扫描」——那两个字在标题里永远出现，
+    // 换成别的同值计数也照样能通过，测不出「数字算对了没有」
+    expect(lines).toContain('扫描   2 个源码文件')
     expect(lines).toContain('跳过 1')
     expect(lines).toContain('未支持依赖扫描的文件类型')
     expect(lines).toContain('连边   1')
@@ -226,6 +241,8 @@ describe('formatDepEvidence', () => {
       graph: { edges: new Map(), scanned: [], skipped: [] }, cycles: [], suggestion: [],
     }).join('\n')
     expect(lines).toContain('无强连通分量')
+    // 没有跳过任何文件时明说「无」，不要留一个「跳过 0（）」这种空括号
+    expect(lines).toContain('跳过 无')
   })
 })
 

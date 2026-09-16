@@ -7,6 +7,7 @@ import type { PlanContext } from '../../src/narrate/plan.js'
 const ctx: PlanContext = {
   base: 'b', snapshot: 's', changes: [], rules: DEFAULT_RULES,
   canonical: new Map(), registry: EMPTY_REGISTRY, pinned: new Map(), deps: new Map(),
+  present: new Set(),
 }
 
 describe('RulePlanner', () => {

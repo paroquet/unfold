@@ -48,6 +48,7 @@ function ctxFor(base: string, snapshot: string, changes: FileChange[], registry:
     registry,
     pinned: new Map(),
     deps: new Map(),
+    present: new Set(),
   }
 }
 

@@ -43,6 +43,13 @@ export interface PlanContext {
   pinned: Map<string, string>
   /** canonical 单元之间的依赖边，供 chapter-backward-dep 检查 */
   deps: Map<string, Set<string>>
+  /**
+   * 快照树里字面存在的路径（原始 `ls-tree` 结果，不是册用的那个更宽的
+   * `present`）。体检用它判断「测试配对到的 canonical 单元是否真的对应
+   * 一个存在的文件」——配对规约不到实现时会虚构一个路径，那个路径不该
+   * 被当成「存在」。
+   */
+  present: Set<string>
   previous?: Plan
 }
 

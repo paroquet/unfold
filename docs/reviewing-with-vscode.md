@@ -21,9 +21,9 @@ unfold narrate --repo ~/orca/workspaces/<项目>/<worktree> --open
 打开叙事 worktree 之后，左侧 Source Control 面板的 **Graph** 里能看到章节链：
 
 ```
-● 第 3 章 测试与文档
-● 第 2 章 核心逻辑
-● 第 1 章 契约
+● 第 3 章 bin：unfold.ts
+● 第 2 章 narrate：run.ts
+● 第 1 章 git：exec.ts → worktree.ts
 ● <base>
 ```
 
@@ -37,9 +37,9 @@ unfold narrate --repo ~/orca/workspaces/<项目>/<worktree> --open
 ```
   code <worktree>                                   # 用 VS Code 打开
   git -C <worktree> log --oneline <base>..<branch>  # 章节一览
-  git -C <worktree> show <branch>~2                 # 第 1 章 契约
-  git -C <worktree> show <branch>~1                 # 第 2 章 核心逻辑
-  git -C <worktree> show <branch>                   # 第 3 章 接线与调用方
+  git -C <worktree> show <branch>~2                 # 第 1 章 git：exec.ts → worktree.ts
+  git -C <worktree> show <branch>~1                 # 第 2 章 narrate：run.ts
+  git -C <worktree> show <branch>                   # 第 3 章 bin：unfold.ts
 ```
 
 叙事分支是一条线性链，第 k 章就是 `<branch>~(N-k)`，最后一章是分支 tip。
@@ -127,8 +127,8 @@ unfold narrate --repo <path> --reuse --compare latest
 
 ```
 依赖证据
-  扫描   30 个源码文件｜跳过 26（未支持依赖扫描的文件类型 23、内容不可读（已删除或二进制） 3）
-  连边   89 条跨文件依赖
+  扫描   30 个源码文件｜跳过 27（未支持依赖扫描的文件类型 24、内容不可读（已删除或二进制） 3）
+  连边   90 条跨文件依赖
   破环   无强连通分量
   建议   "order": ["docs", "packages/core/src/bin", "packages/core/src/narrate"]
 ```
@@ -158,8 +158,8 @@ unfold narrate --repo <path> --reset-chapters
 
 ```
 提示
-  第 1 章「仓库根：.gitignore → README.md」有 2 个实现文件、0 个测试
-  第 26 章「仓库根：pnpm-lock.yaml → vitest.config.ts」有 2 个实现文件、0 个测试
+  第 22 章「bin：unfold.ts」有 1 个实现文件、0 个测试
+  第 26 章「仓库根：pnpm-lock.yaml → vitest.config.ts」有 1 个实现文件、0 个测试
 ```
 
 这些提示**一律是 warn，不拦截出货**——纯文档改动、纯重构、来不及补测试的 hotfix

@@ -21,6 +21,32 @@ export const DEFAULT_PAIR_RULES: PairRules = {
   suffixes: ['.test', '.spec', '_test', 'Test'],
 }
 
+const NOT_PAIRABLE_EXT = new Set([
+  '.md', '.mdx', '.txt', '.rst', '.adoc',
+  '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.lock',
+  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.pdf',
+])
+
+/**
+ * 这个路径是否「看起来是代码」，也就是谈得上有没有配套测试。
+ *
+ * 文档、配置、占位文件没有对应的实现，给它们规约出 canonical path 只会凭空
+ * 造出不存在的路径：`tests/contract/.gitkeep` 被规约成 `src/contract/.gitkeep`，
+ * 而那个目录根本不存在，随后 suggestOrder 会把它当成目录前缀建议给用户。
+ * `tsconfig.test.json` 更糟——`.test` 后缀被剥掉后它成了「tsconfig.json 的测试」。
+ *
+ * 无扩展名的文件（`.gitignore`、`.nvmrc`、`LICENSE`）与 `*.config.*`
+ * 同样不参与：前者是仓库元数据，后者是工具配置。
+ */
+export function isPairable(path: string): boolean {
+  const slash = path.lastIndexOf('/')
+  const name = slash < 0 ? path : path.slice(slash + 1)
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0) return false
+  if (name.includes('.config.')) return false
+  return !NOT_PAIRABLE_EXT.has(name.slice(dot))
+}
+
 /** 从文件名里剥掉测试标记；`rules.suffixes` 里第一个命中的生效。 */
 function stripSuffix(fileName: string, suffixes: string[]): string | null {
   const dot = fileName.lastIndexOf('.')
@@ -46,6 +72,8 @@ function stripSuffix(fileName: string, suffixes: string[]): string | null {
  * `app/main/test/kotlin/Foo.kt` 这种根本不存在的路径。
  */
 export function canonicalCandidates(path: string, rules: PairRules): string[] {
+  if (!isPairable(path)) return []
+
   const segments = path.split('/')
   const fileName = segments[segments.length - 1] as string
   const dirs = segments.slice(0, -1)

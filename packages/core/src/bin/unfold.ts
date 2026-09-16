@@ -79,6 +79,11 @@ async function main(argv: string[]): Promise<void> {
     ...(defaultBranch !== undefined ? { defaultBranch } : {}),
     ...(rulesPath !== undefined ? { rulesPath } : {}),
     ...(resetChapters === true ? { resetChapters: true as const } : {}),
+    // --dry-run 也要认 --reuse：否则 --dry-run --reuse 会静默地每次都新建一个
+    // 从未落盘、也不会再被用到的 reviewId，读到的册永远是空的——调参时最想要的
+    // 「在现有册上继续预览」反而是唯一做不到的事。这条线以前只接在 narrate() 上，
+    // planOnly() 漏了，是发现 C 项 e2e 时抓出来的既有缺口，顺手一并修掉。
+    ...(reuse === true ? { reuse: true as const } : {}),
   }
 
   if (dryRun === true) {
@@ -109,10 +114,7 @@ async function main(argv: string[]): Promise<void> {
     return
   }
 
-  const result = await narrate(repo, {
-    ...baseOpts,
-    ...(reuse === true ? { reuse: true as const } : {}),
-  })
+  const result = await narrate(repo, baseOpts)
 
   if (!result.hasChanges) {
     out([`没有可讲的改动：${result.branch} 相对 base（${result.base.slice(0, 12)}）没有任何改动。`])

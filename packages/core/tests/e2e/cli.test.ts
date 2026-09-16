@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -108,6 +109,63 @@ describe('unfold narrate（真实 CLI）', () => {
   it('参数写错时给 usage 并以退出码 2 结束，不炸出 git 原始报错', async () => {
     const repo = await createTempRepo()
     await expect(cli(repo.dir, '--base', '--default-branch')).rejects.toMatchObject({ code: 2 })
+    await repo.cleanup()
+  })
+
+  it('--dry-run --reset-chapters：丢册重推、依赖证据与体检提示都打出来，且不落盘', async () => {
+    const repo = await createTempRepo()
+    await repo.write('src/a.ts', 'export const a = 1\n')
+    await repo.commit('base')
+    await repo.git('checkout', '-q', '-b', 'feature')
+    await repo.write('src/a.ts', 'export const a = 2\n')
+    // 提交它，好让下面能把 main 快进到这一步——否则 a.ts 的改动永远相对
+    // main 存在，没法在下一轮的 diff 里真正消失
+    await repo.commit('touch a')
+
+    // 第一轮：真跑，把 a.ts 的章节记进册（--reuse 让后面的轮次落在同一个 review 上）
+    const first = await cli(repo.dir, '--default-branch', 'main', '--reuse')
+    const rootLine = first.split('\n').find((l) => l.startsWith('状态目录'))
+    expect(rootLine).toBeDefined()
+    const reviewRoot = (rootLine as string).replace('状态目录', '').trim()
+    const registryPath = join(reviewRoot, 'registry.json')
+    const registryBefore = await readFile(registryPath, 'utf8')
+
+    // 把 main 快进到 a.ts 的改动上——下一轮 feature 相对 main 的 diff 里
+    // a.ts 会彻底消失（内容与 main 一致了），但它在册里的章是历史记录，
+    // 不会因为这一轮没改就被册悄悄忘掉
+    await repo.git('checkout', 'main')
+    await repo.git('merge', '--ff-only', 'feature')
+    await repo.git('checkout', 'feature')
+
+    // 第二轮：只新增一个不相关的文件；a.ts 已经不在 diff 里了，它在册里的
+    // 旧章应该以「本轮无改动」的空章形式继续出现（除非 --reset-chapters）
+    await repo.write('src/b.ts', 'export const b = 1\n')
+
+    const withoutReset = await cli(repo.dir, '--default-branch', 'main', '--reuse', '--dry-run')
+    expect(withoutReset).toContain('本轮无改动') // a.ts 的旧章沿用下来，成了空章
+    expect(withoutReset).toContain('依赖证据') // 罩住 depGraph/cycles 的接线
+    expect(withoutReset).toContain('建议')
+    expect(withoutReset).toContain('提示') // 罩住 warnings 的接线（b.ts 有实现无测试）
+
+    const withReset = await cli(
+      repo.dir,
+      '--default-branch',
+      'main',
+      '--reuse',
+      '--dry-run',
+      '--reset-chapters',
+    )
+    // 丢册重推：a.ts 那个不属于本轮改动的旧章不会被凭空造出来
+    expect(withReset).not.toContain('本轮无改动')
+    expect(withReset).toContain('依赖证据')
+    expect(withReset).toContain('建议')
+    expect(withReset).toContain('提示')
+
+    // dry-run 不落盘：不管带不带 --reset-chapters，registry.json 字节都没变过
+    const registryAfter = await readFile(registryPath, 'utf8')
+    expect(registryAfter).toBe(registryBefore)
+
+    await cli(repo.dir, '--clean')
     await repo.cleanup()
   })
 })

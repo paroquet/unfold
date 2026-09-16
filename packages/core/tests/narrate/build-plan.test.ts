@@ -21,7 +21,8 @@ const registry = (chapters: Array<Partial<Registry['chapters'][number]>>): Regis
 
 const ctx = (over: Partial<PlanContext>): PlanContext => ({
   base: 'b', snapshot: 's', changes: [], rules: DEFAULT_RULES,
-  canonical: new Map(), registry: registry([]), pinned: new Map(), deps: new Map(), ...over,
+  canonical: new Map(), registry: registry([]), pinned: new Map(), deps: new Map(),
+  present: new Set(), ...over,
 })
 
 describe('buildPlan', () => {
