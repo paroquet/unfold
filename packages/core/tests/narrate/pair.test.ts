@@ -17,9 +17,12 @@ describe('canonicalCandidates', () => {
     expect(canonicalCandidates('packages/core/src/narrate/rules.ts', DEFAULT_PAIR_RULES)).toEqual([])
   })
 
-  it('只替换第一个命中的目录段——src/test/... 里的 src 不能被当成待替换目标', () => {
-    const got = canonicalCandidates('app/src/test/kotlin/Foo.kt', DEFAULT_PAIR_RULES)
-    expect(got.every((p) => p.startsWith('app/src/'))).toBe(true)
+  it('同一个目录段出现两次时，替换的是第一个——它才是源码集标记', () => {
+    // dirs = ['app','test','kotlin','test']：indexOf 取 1，lastIndexOf 会取 3，
+    // 两者产出不同的候选，这条测试才真的钉得住「替换第一个」
+    const got = canonicalCandidates('app/test/kotlin/test/FooTest.kt', DEFAULT_PAIR_RULES)
+    expect(got).toContain('app/src/kotlin/test/Foo.kt')
+    expect(got).not.toContain('app/test/kotlin/src/Foo.kt')
   })
 })
 
