@@ -42,20 +42,24 @@ describe('topoOrder', () => {
   })
 
   it('order 前缀命中的节点按给定顺序排到最前，桶内仍走依赖序', () => {
+    // 前缀顺序刻意与字典序相反（src/git 在 src/bin 前），
+    // 这样只有真的按桶号排才能通过——退化成纯字典序会先给出 src/bin/x.ts
     const { order } = topoOrder(
       ['src/bin/x.ts', 'src/git/a.ts', 'src/git/b.ts'],
       graph({ 'src/git/b.ts': ['src/git/a.ts'], 'src/git/a.ts': [], 'src/bin/x.ts': [] }),
-      ['src/bin', 'src/git'],
+      ['src/git', 'src/bin'],
     )
-    expect(order).toEqual(['src/bin/x.ts', 'src/git/a.ts', 'src/git/b.ts'])
+    expect(order).toEqual(['src/git/a.ts', 'src/git/b.ts', 'src/bin/x.ts'])
   })
 
   it('未被任何前缀命中的节点排在命中者之后', () => {
+    // 命中前缀的是 z/other.ts，字典序却排在 src/git/a.ts 之后，
+    // 所以这条只有在桶号真的生效时才成立
     const { order } = topoOrder(
       ['z/other.ts', 'src/git/a.ts'],
       graph({ 'z/other.ts': [], 'src/git/a.ts': [] }),
-      ['src/git'],
+      ['z'],
     )
-    expect(order).toEqual(['src/git/a.ts', 'z/other.ts'])
+    expect(order).toEqual(['z/other.ts', 'src/git/a.ts'])
   })
 })
