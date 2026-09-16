@@ -78,6 +78,8 @@ export interface NarrateChanges {
   warnings: ValidationIssue[]
   /** 更新后的章节册总章数（含 empty / deleted） */
   registryChapters: number
+  /** `--reset-chapters` 解除了多少条批注的归属；不带该开关时为 0 */
+  unanchored: number
   depGraph: DepGraph
   cycles: string[][]
 }
@@ -113,6 +115,8 @@ export type PlanOnlyResult =
       plan: Plan
       warnings: ValidationIssue[]
       registryChapters: number
+      /** `--reset-chapters` 会解除多少条批注的归属；不带该开关时为 0 */
+      unanchored: number
       depGraph: DepGraph
       cycles: string[][]
     }
@@ -133,15 +137,19 @@ interface Prepared {
    * 再并上本轮未删除文件的 canonical 单元——即便那个单元本身并不对应
    * 任何真实文件（配对规约不到实现时会退回一个虚构路径），只要配对它的
    * 测试文件本身没被删，这个单元就该继续被册认领，不能因为它不是一个
-   * 真实文件就被当成「已删除」清出册。**不要**拿它去判断「这个路径真的
-   * 存在吗」——那件事要用下面的 `tree`。
+   * 真实文件就被当成「已删除」清出册。
+   *
+   * **刻意不叫 `present`**：`PlanContext.present` 是另一个更窄的集合
+   * （下面的 `tree`，用于体检「这个路径真的存在吗」），两者靠手工接线区分。
+   * 同名会让一个 `{ ...draftCtx, present }` 的展开悄无声息地取错集合，
+   * 而那种错既不炸也不报警：体检会把每个纯测试目录都判成「实现存在」。
    */
-  present: Set<string>
+  unitsAlive: Set<string>
   /**
    * 快照树里**字面存在**的全部路径（一次 `ls-tree` 的原始结果）。
-   * 供体检判断「测试配对到的实现是否真的能找到」——`present` 不能用在这里，
-   * 它按设计会把配对规约不到实现时虚构出的路径也算进去，那样每一个纯测试
-   * 目录（e2e、测试 helper）都会被判成「实现存在」，体检提示就白加了。
+   * 供体检判断「测试配对到的实现是否真的能找到」——`unitsAlive` 不能用在
+   * 这里，它按设计会把配对规约不到实现时虚构出的路径也算进去，那样每一个
+   * 纯测试目录（e2e、测试 helper）都会被判成「实现存在」，体检提示就白加了。
    */
   tree: Set<string>
   graph: DepGraph
@@ -217,9 +225,9 @@ async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
     fileCount: (unit) => fileCountOf.get(unit) ?? 1,
   })
 
-  const present = new Set<string>(tree)
+  const unitsAlive = new Set<string>(tree)
   for (const [path, unit] of canonical) {
-    if (changeOf.get(path)?.kind !== 'delete') present.add(unit)
+    if (changeOf.get(path)?.kind !== 'delete') unitsAlive.add(unit)
   }
 
   return {
@@ -231,7 +239,7 @@ async function prepare(repo: string, opts: NarrateOptions): Promise<Prepared> {
     rules,
     canonical,
     units,
-    present,
+    unitsAlive,
     tree,
     graph,
     order,
@@ -245,6 +253,11 @@ interface Assembled {
   warnings: ValidationIssue[]
   registry: Registry
   annotations: Annotation[]
+  /**
+   * `--reset-chapters` 解除了多少条批注的章节归属（spec §5.5 要求打印出来）。
+   * 不带该开关时恒为 0。批注本身不删，只是 chapterKey 置空。
+   */
+  unanchored: number
 }
 
 /**
@@ -286,6 +299,10 @@ async function assemble(
     opts.resetChapters === true
       ? migrated.map((a) => ({ ...a, chapterKey: null, state: 'unanchored' as const }))
       : migrated
+  // 数的是**原本有归属**的那些：已经 unanchored 的批注这一次并没有被影响到，
+  // 把它们也算进去会让「影响 N 条」一轮比一轮虚高
+  const unanchored =
+    opts.resetChapters === true ? migrated.filter((a) => a.chapterKey !== null).length : 0
   // pinnedByAnnotations 钉的是本轮 plan 里的 hunk id，必须用 base→本轮 的 p.changes——
   // 与上面迁移锚点用的 diff 不是同一件事，不能共用 anchorChanges。
   const pinned = pinnedByAnnotations(annotations, p.changes)
@@ -302,7 +319,7 @@ async function assemble(
     pinned,
     deps: p.graph.edges,
     // 体检要判断的是「这个路径字面上存在吗」，用 p.tree（原始 ls-tree
-    // 结果）；p.present 是给册用的另一个更宽的集合，见 Prepared.present 上的注释。
+    // 结果）；册用的是另一个更宽的 p.unitsAlive，见 Prepared.unitsAlive 上的注释。
     present: p.tree,
   }
   const assignment = await planner.assign(draftCtx)
@@ -329,7 +346,7 @@ async function assemble(
     registry: registryBefore,
     segments,
     round,
-    present: p.present,
+    unitsAlive: p.unitsAlive,
     activeUnits: new Set(p.units),
     order: p.order,
   })
@@ -375,7 +392,7 @@ async function assemble(
   }
   const warnings = issues.filter((i) => i.severity === 'warn')
 
-  return { plan, warnings, registry, annotations: remapped }
+  return { plan, warnings, registry, annotations: remapped, unanchored }
 }
 
 async function currentBranch(repo: string): Promise<string> {
@@ -427,6 +444,7 @@ export async function planOnly(
     plan: assembled.plan,
     warnings: assembled.warnings,
     registryChapters: assembled.registry.chapters.length,
+    unanchored: assembled.unanchored,
     depGraph: p.graph,
     cycles: p.cycles,
   }
@@ -539,6 +557,7 @@ export async function narrate(
     worktree,
     warnings,
     registryChapters: registry.chapters.length,
+    unanchored: assembled.unanchored,
     depGraph: p.graph,
     cycles: p.cycles,
   }

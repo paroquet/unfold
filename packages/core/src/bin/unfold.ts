@@ -11,6 +11,7 @@ import {
   formatDepEvidence,
   formatPlanDiff,
   formatPlanSummary,
+  formatResetChapters,
   formatRulesChanged,
   formatWarnings,
   reviewCommands,
@@ -27,7 +28,7 @@ function usage(): never {
       '  --repo <path>            指定仓库，缺省为当前目录',
       '  --base <rev>             显式指定 base，缺省自动推导',
       '  --default-branch <name>  推导 base 时用的默认分支，缺省 main',
-      '  --rules <file>           叙事规则配置；缺省读 <repo>/.unfold/narrative.json，再缺省用内置四层',
+      '  --rules <file>           叙事规则配置；缺省读 <repo>/.unfold/narrative.json，再缺省用内置默认',
       '',
       '  --dry-run                只算 plan 并打印，不建分支、不建 worktree、不留任何产物',
       '  --reuse                  复用该仓库最近一次 review 的目录与分支，轮次递增',
@@ -105,6 +106,7 @@ async function main(argv: string[]): Promise<void> {
     }
     const warnLines = formatWarnings(result.warnings)
     out([
+      ...(resetChapters === true ? formatResetChapters(result.unanchored) : []),
       `dry-run（什么都没落地）`,
       `base       ${result.base.slice(0, 12)}`,
       `快照       ${result.snapshot.slice(0, 12)}`,
@@ -134,6 +136,10 @@ async function main(argv: string[]): Promise<void> {
   }
 
   const plan = await readPlan(repo, result.reviewId)
+
+  if (resetChapters === true) {
+    out(formatResetChapters(result.unanchored))
+  }
 
   if (result.rulesChanged) {
     out(formatRulesChanged(result.previousRulesFingerprint, result.rulesFingerprint))

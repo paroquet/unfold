@@ -4,6 +4,7 @@ import {
   formatDepEvidence,
   formatPlanDiff,
   formatPlanSummary,
+  formatResetChapters,
   formatRulesChanged,
   formatWarnings,
   reviewCommands,
@@ -157,6 +158,18 @@ describe('formatPlanSummary', () => {
     expect(out.some((l) => l.includes('契约') && l.includes('本轮无改动'))).toBe(true)
     expect(out.some((l) => l.includes('老模块') && l.includes('模块已删除'))).toBe(true)
     expect(out.some((l) => l.includes('src/types.ts'))).toBe(false)
+  })
+})
+
+describe('formatResetChapters', () => {
+  it('说出被解除归属的批注条数，并明说批注本身保留（spec §5.5）', () => {
+    const text = formatResetChapters(3).join('\n')
+    expect(text).toContain('3 条批注')
+    expect(text).toContain('保留')
+  })
+
+  it('一条批注都没影响到时明说「没有批注受影响」，不打一个 0', () => {
+    expect(formatResetChapters(0).join('\n')).toContain('没有批注受影响')
   })
 })
 

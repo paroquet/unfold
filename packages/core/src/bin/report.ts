@@ -58,6 +58,22 @@ export function reviewCommands(input: ReviewCommandsInput): string[] {
 }
 
 /**
+ * `--reset-chapters` 之后的一行交代（spec §5.5）：丢了册，顺带影响了多少条批注。
+ *
+ * 批注**不删**，只解除与旧章的绑定，下一轮按锚点所在的文件重新归入新章。
+ * 不打这个数的话，「唯一能让章节消失的操作」到底动了什么完全看不见。
+ */
+export function formatResetChapters(unanchored: number): string[] {
+  return [
+    unanchored === 0
+      ? '已丢弃章节册重新推导；没有批注受影响。'
+      : `已丢弃章节册重新推导；${unanchored} 条批注解除了章节归属（批注本身保留，` +
+        '下一轮按锚点所在的文件重新归章）。',
+    '',
+  ]
+}
+
+/**
  * 规则指纹变了时的提示（spec §5.6）。
  *
  * 有了章节册之后，**规则变化不再自动重排**——指纹的用途从「要不要沿用」

@@ -40,8 +40,14 @@ export interface UpdateInput {
    */
   segments: Segment[]
   round: number
-  /** 快照里仍然存在的 canonical path */
-  present: Set<string>
+  /**
+   * 仍然存续的 canonical 单元：快照树里的路径，再并上本轮未删除文件的
+   * canonical 单元（含配对虚构出来的那些）。章的成员留不留由它决定。
+   *
+   * 不叫 `present`：`PlanContext.present` 是「快照树里字面存在的路径」，
+   * 比这个窄，两者同名会让调用方展开对象时悄悄取错集合。
+   */
+  unitsAlive: Set<string>
   /** 本轮真有改动的 canonical 单元。章是否 active 由它的成员是否在这里决定 */
   activeUnits: Set<string>
   /** 本轮的依赖序，用来给新章定位 */
@@ -54,14 +60,14 @@ export interface UpdateInput {
  * 就可能把一批文件拽到新章，人写的批注全部漂走。
  */
 export function updateRegistry(input: UpdateInput): Registry {
-  const { registry, segments, round, present, activeUnits, order } = input
+  const { registry, segments, round, unitsAlive, activeUnits, order } = input
   const orderPos = new Map(order.map((path, i) => [path, i]))
 
   // 1) 已有章：剔掉已删成员，决定状态，必要时顺延 key
   const claimed = new Set<string>()
   const kept: ChapterRecord[] = []
   for (const chapter of registry.chapters) {
-    const members = chapter.members.filter((m) => present.has(m))
+    const members = chapter.members.filter((m) => unitsAlive.has(m))
     for (const m of members) claimed.add(m)
 
     if (members.length === 0) {

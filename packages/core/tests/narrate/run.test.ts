@@ -365,7 +365,13 @@ describe('narrate 端到端', () => {
       }],
     })
 
-    await narrate(repo.dir, { reuse: true, resetChapters: true })
+    expect(first.unanchored).toBe(0) // 没带 --reset-chapters，一条都没解除
+
+    const reset = await narrate(repo.dir, { reuse: true, resetChapters: true })
+    if (!reset.hasChanges) throw new Error('应该有改动')
+    // spec §5.5 要求打印「影响了多少条批注」，所以这个数得真的算出来
+    expect(reset.unanchored).toBe(1)
+
     const held = await readAnnotations(first.reviewRoot)
     expect(held.annotations[0]?.state).toBe('unanchored')
     expect(held.annotations[0]?.body).toBe('看这里')

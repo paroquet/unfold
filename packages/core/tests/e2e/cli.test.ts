@@ -108,7 +108,16 @@ describe('unfold narrate（真实 CLI）', () => {
 
   it('参数写错时给 usage 并以退出码 2 结束，不炸出 git 原始报错', async () => {
     const repo = await createTempRepo()
-    await expect(cli(repo.dir, '--base', '--default-branch')).rejects.toMatchObject({ code: 2 })
+    const err = await cli(repo.dir, '--base', '--default-branch').then(
+      () => {
+        throw new Error('期望以退出码 2 失败')
+      },
+      (e: { code?: number; stderr?: string }) => e,
+    )
+    expect(err.code).toBe(2)
+    expect(err.stderr).toContain('--reset-chapters')
+    // v1 的「内置四层」已经删了，usage 里不该还留着它的说法
+    expect(err.stderr).not.toContain('四层')
     await repo.cleanup()
   })
 
@@ -157,6 +166,9 @@ describe('unfold narrate（真实 CLI）', () => {
     )
     // 丢册重推：a.ts 那个不属于本轮改动的旧章不会被凭空造出来
     expect(withReset).not.toContain('本轮无改动')
+    // spec §5.5：唯一能让章节消失的操作，得交代它影响了多少条批注
+    expect(withReset).toContain('已丢弃章节册重新推导')
+    expect(withoutReset).not.toContain('已丢弃章节册重新推导')
     expect(withReset).toContain('依赖证据')
     expect(withReset).toContain('建议')
     expect(withReset).toContain('提示')
