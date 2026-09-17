@@ -1,6 +1,6 @@
 import { rulesFingerprint } from './rules.js'
 import { hunkPath } from './diff.js'
-import { isPairable } from './pair.js'
+import { isPairable, roleOf } from './pair.js'
 import type { Plan, PlanContext } from './plan.js'
 
 export type ValidationCode =
@@ -193,7 +193,11 @@ export function validatePlan(plan: Plan, ctx: PlanContext): ValidationIssue[] {
       }
     }
 
-    if (files.length > ctx.rules.maxFiles) {
+    // maxFiles 管的是「一章代码要能一口气读完」。构建配置与文档不按它切段
+    // （见 segment.ts），再拿它去警告就是在报告我们自己的设计决定，而不是
+    // 报告问题——这种必然触发的警告只会淹掉真信号。章内角色恒定（角色变了
+    // segment.ts 必断），取首个文件的角色即代表整章。
+    if (roleOf(files[0] as string) === 'source' && files.length > ctx.rules.maxFiles) {
       issues.push({
         code: 'chapter-oversized',
         severity: 'warn',

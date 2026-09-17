@@ -309,6 +309,19 @@ describe('章节体检', () => {
     expect(issues.find((i) => i.code === 'chapter-oversized')?.severity).toBe('warn')
   })
 
+  it('非源码章（文档）超过 maxFiles 不报 chapter-oversized——它本就不按 maxFiles 切段', () => {
+    const paths = Array.from({ length: 20 }, (_, i) => `docs/d${i}.md`)
+    const issues = validatePlan(
+      { ...base, chapters: [chapter({ filePaths: paths })] },
+      ctx({
+        changes: paths.map(mkChange),
+        canonical: new Map(paths.map((p) => [p, p])),
+        rules: { ...DEFAULT_RULES, maxFiles: 2 },
+      }),
+    )
+    expect(issues.find((i) => i.code === 'chapter-oversized')).toBeUndefined()
+  })
+
   it('第 N 章依赖第 M 章且 M > N 时报 chapter-backward-dep', () => {
     const issues = validatePlan(
       {
