@@ -1,4 +1,4 @@
-import { isPairable } from './pair.js'
+import { roleOf } from './pair.js'
 
 export interface OrderResult {
   /** 全序：被依赖的在前。同样的输入永远产出同样的顺序 */
@@ -112,27 +112,31 @@ export function topoOrder(
   }
 
   /**
-   * 该分量落在第几个桶里。桶号从小到大依次是：`prefixes` 里的每个前缀、
-   * 未命中前缀的源码、**非源码**。
+   * 该成员落在第几层。层号从小到大依次是：`prefixes` 里的每个前缀、
+   * 未命中前缀的源码、**build**、**doc**（spec §4.5 的「非源码」现在
+   * 按角色再分两层，而不是合并成一个桶）。
    *
-   * 非源码文件（`.md`/`.json`/锁文件/图片/无扩展名的仓库元数据）单开一个
-   * 最后的桶（spec §4.5）：它们不参与依赖图，一条边都没有，跟源码混在同一个
-   * 桶里就只按字典序排——`README.md` 于是排在 `packages/...` 前面，整条叙事
-   * 从一篇文档讲起。桶内仍按字典序，相对顺序不变。
+   * build/doc 文件不参与依赖图，一条边都没有，跟源码混在同一层里就只按
+   * 字典序排——`README.md` 于是排在 `packages/...` 前面，整条叙事从一篇
+   * 文档讲起。分两层是为了让构建配置排在文档之前：两者都不是「代码」，
+   * 但构建配置更接近代码，读者应该先看完怎么编译/怎么跑，再看文档。
    *
-   * 判据复用 `pair.ts` 的 `isPairable`（order 不被任何人 import，引它不成环），
+   * 判据复用 `pair.ts` 的 `roleOf`（order 不被任何人 import，引它不成环），
    * 而不是另起一份扩展名清单——两份清单迟早会漂。
    */
-  const bucketOf = (component: string[]): number => {
-    if (component.every((member) => !isPairable(member))) return prefixes.length + 1
+  const tierOf = (member: string): number => {
+    const role = roleOf(member)
+    if (role === 'build') return prefixes.length + 1
+    if (role === 'doc') return prefixes.length + 2
     let best = prefixes.length
-    for (const member of component) {
-      for (const [i, prefix] of prefixes.entries()) {
-        if (i < best && (member === prefix || member.startsWith(`${prefix}/`))) best = i
-      }
+    for (const [i, prefix] of prefixes.entries()) {
+      if (i < best && (member === prefix || member.startsWith(`${prefix}/`))) best = i
     }
     return best
   }
+  // 强连通分量可能横跨角色（前提是它们之间真的有依赖边）。这种时候取
+  // 分量里最低的层号——代码不该被一个混进来的构建文件拖到最后。
+  const bucketOf = (component: string[]): number => Math.min(...component.map(tierOf))
   const bucket = components.map(bucketOf)
   const head = components.map((component) => component[0] as string)
 

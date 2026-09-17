@@ -49,4 +49,41 @@ describe('segment', () => {
     })
     expect(chapter?.intro).toContain('先后不代表调用方向')
   })
+
+  it('build 文件跨三个目录仍合成一章：按归档位置切分正是要消灭的缺陷', () => {
+    const got = segment({
+      order: ['package.json', 'core/package.json', 'contract/.gitkeep'],
+      cycles: [], maxFiles: 8, fileCount: one,
+    })
+    expect(got).toHaveLength(1)
+    expect(got[0]?.members).toEqual(['package.json', 'core/package.json', 'contract/.gitkeep'])
+  })
+
+  it('source 后接 doc：角色变化必断，两章', () => {
+    const got = segment({ order: ['s/a.ts', 'README.md'], cycles: [], maxFiles: 8, fileCount: one })
+    expect(got).toHaveLength(2)
+  })
+
+  it('十个文档文件在 maxFiles: 2 下仍合成一章：文档是扫读的，不按 maxFiles 断', () => {
+    const docs = Array.from({ length: 10 }, (_, i) => `docs/d${i}.md`)
+    const got = segment({ order: docs, cycles: [], maxFiles: 2, fileCount: one })
+    expect(got).toHaveLength(1)
+    expect(got[0]?.members).toHaveLength(10)
+  })
+
+  it('build 章标题以「构建与配置」开头', () => {
+    const [chapter] = segment({
+      order: ['package.json', 'vitest.config.ts'], cycles: [], maxFiles: 8, fileCount: one,
+    })
+    expect(chapter?.title).toBe('构建与配置：package.json → vitest.config.ts')
+  })
+
+  it('doc 章标题与导语：文档开头，且说明按路径顺序而非依赖顺序', () => {
+    const [chapter] = segment({
+      order: ['README.md', 'docs/getting-started.md'], cycles: [], maxFiles: 8, fileCount: one,
+    })
+    expect(chapter?.title).toBe('文档：README.md → getting-started.md')
+    expect(chapter?.intro).toContain('路径')
+    expect(chapter?.intro).not.toContain('依赖顺序')
+  })
 })

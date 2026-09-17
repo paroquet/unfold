@@ -21,30 +21,63 @@ export const DEFAULT_PAIR_RULES: PairRules = {
   suffixes: ['.test', '.spec', '_test', 'Test'],
 }
 
-const NOT_PAIRABLE_EXT = new Set([
-  '.md', '.mdx', '.txt', '.rst', '.adoc',
-  '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.lock',
-  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.pdf',
+/** 一个文件在叙事里扮演的角色：代码、构建配置，还是文档。 */
+export type FileRole = 'source' | 'build' | 'doc'
+
+// 精确文件名（不看扩展名）——先于扩展名判断，否则 requirements.txt
+// 会被「.txt → doc」的规则先接住，变成一篇文档。
+const DOC_EXACT_NAMES = new Set(['LICENSE', 'NOTICE', 'COPYING', 'CHANGELOG', 'AUTHORS'])
+const BUILD_EXACT_NAMES = new Set([
+  'Dockerfile', 'Makefile', 'Justfile', 'Procfile',
+  'go.mod', 'go.sum', 'Gemfile', 'Gemfile.lock',
+  'requirements.txt', '.gitlab-ci.yml',
 ])
+
+const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst', '.adoc'])
+const DOC_ASSET_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.pdf', '.woff', '.woff2', '.ttf',
+])
+const BUILD_EXTENSIONS = new Set(['.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.lock', '.properties'])
+
+/**
+ * 给一个路径判角色：source / build / doc。判定顺序本身是规则的一部分——
+ * `requirements.txt` 必须在「精确文件名→build」这一步就被接住，否则会被
+ * 后面「.txt→doc」的扩展名规则先命中，变成一篇文档；`.github/` 下的 `.yml`
+ * 同理必须先按路径归为 build——不是靠扩展名巧合对上，是因为它就是 CI 配置。
+ *
+ * 文档、构建配置、占位文件没有对应的实现，`isPairable`（下面的薄别名）靠
+ * 这个函数把它们排除在「谈得上有没有配套测试」之外：给它们规约出
+ * canonical path 只会凭空造出不存在的路径——`tests/contract/.gitkeep`
+ * 规约成 `src/contract/.gitkeep`，那个目录根本不存在。
+ */
+export function roleOf(path: string): FileRole {
+  if (path === '.github' || path.startsWith('.github/')) return 'build'
+
+  const slash = path.lastIndexOf('/')
+  const name = slash < 0 ? path : path.slice(slash + 1)
+  if (DOC_EXACT_NAMES.has(name)) return 'doc'
+  if (BUILD_EXACT_NAMES.has(name)) return 'build'
+
+  const dot = name.lastIndexOf('.')
+  // 无真实扩展名：既包括 Makefile 形的名字，也包括 .gitignore / .nvmrc /
+  // .gitkeep 这类纯点文件（此时 dot === 0）——两者都是仓库元数据。
+  if (dot <= 0) return 'build'
+  if (name.includes('.config.')) return 'build'
+
+  const ext = name.slice(dot)
+  if (DOC_EXTENSIONS.has(ext)) return 'doc'
+  if (DOC_ASSET_EXTENSIONS.has(ext)) return 'doc'
+  if (BUILD_EXTENSIONS.has(ext)) return 'build'
+  return 'source'
+}
 
 /**
  * 这个路径是否「看起来是代码」，也就是谈得上有没有配套测试。
- *
- * 文档、配置、占位文件没有对应的实现，给它们规约出 canonical path 只会凭空
- * 造出不存在的路径：`tests/contract/.gitkeep` 被规约成 `src/contract/.gitkeep`，
- * 而那个目录根本不存在，随后 suggestOrder 会把它当成目录前缀建议给用户。
- * `tsconfig.test.json` 更糟——`.test` 后缀被剥掉后它成了「tsconfig.json 的测试」。
- *
- * 无扩展名的文件（`.gitignore`、`.nvmrc`、`LICENSE`）与 `*.config.*`
- * 同样不参与：前者是仓库元数据，后者是工具配置。
+ * 薄别名：真正的判断在 `roleOf` 里，这里只是把 `isPairable` 的老调用点
+ * 接到新的角色判断上，行为保持不变。
  */
 export function isPairable(path: string): boolean {
-  const slash = path.lastIndexOf('/')
-  const name = slash < 0 ? path : path.slice(slash + 1)
-  const dot = name.lastIndexOf('.')
-  if (dot <= 0) return false
-  if (name.includes('.config.')) return false
-  return !NOT_PAIRABLE_EXT.has(name.slice(dot))
+  return roleOf(path) === 'source'
 }
 
 /** 从文件名里剥掉测试标记；`rules.suffixes` 里第一个命中的生效。 */

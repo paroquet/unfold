@@ -62,12 +62,12 @@ describe('topoOrder', () => {
     expect(order).toEqual(['src/a.ts', 'README.md'])
   })
 
-  it('非源码桶内部仍按路径字典序', () => {
+  it('非源码按角色分两层（build 先于 doc），层内仍按路径字典序', () => {
     const { order } = topoOrder(
       ['pnpm-lock.yaml', 'docs/b.md', 'docs/a.md', 'src/z.ts'],
       graph({ 'pnpm-lock.yaml': [], 'docs/b.md': [], 'docs/a.md': [], 'src/z.ts': [] }),
     )
-    expect(order).toEqual(['src/z.ts', 'docs/a.md', 'docs/b.md', 'pnpm-lock.yaml'])
+    expect(order).toEqual(['src/z.ts', 'pnpm-lock.yaml', 'docs/a.md', 'docs/b.md'])
   })
 
   it('order 前缀也管不到非源码：命中前缀的 .md 仍排在源码之后', () => {
@@ -79,6 +79,13 @@ describe('topoOrder', () => {
       ['docs'],
     )
     expect(order).toEqual(['src/a.ts', 'docs/x.md'])
+  })
+
+  it('source、build、doc 三档在无依赖边时按这个顺序排列，与输入顺序无关', () => {
+    const nodes = ['README.md', 'package.json', 'src/a.ts']
+    const e = graph({ 'README.md': [], 'package.json': [], 'src/a.ts': [] })
+    expect(topoOrder(nodes, e).order).toEqual(['src/a.ts', 'package.json', 'README.md'])
+    expect(topoOrder([...nodes].reverse(), e).order).toEqual(['src/a.ts', 'package.json', 'README.md'])
   })
 
   it('未被任何前缀命中的节点排在命中者之后', () => {
