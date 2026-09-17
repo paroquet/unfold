@@ -27,11 +27,13 @@ export type FileRole = 'source' | 'build' | 'doc'
 // 精确文件名（不看扩展名）——先于扩展名判断，否则 requirements.txt
 // 会被「.txt → doc」的规则先接住，变成一篇文档。
 const DOC_EXACT_NAMES = new Set(['LICENSE', 'NOTICE', 'COPYING', 'CHANGELOG', 'AUTHORS'])
-const BUILD_EXACT_NAMES = new Set([
-  'Dockerfile', 'Makefile', 'Justfile', 'Procfile',
-  'go.mod', 'go.sum', 'Gemfile', 'Gemfile.lock',
-  'requirements.txt', '.gitlab-ci.yml',
-])
+// 只列「少了这条规则会被扩展名判错」的三个：go.mod/go.sum 的扩展名
+// （.mod/.sum）不在任何清单里，落到「其余 → source」；requirements.txt
+// 会被「.txt → doc」先接住。Dockerfile/Makefile/Justfile/Procfile/Gemfile
+// 没有真扩展名，走 `dot <= 0 → build`；Gemfile.lock/.gitlab-ci.yml 的
+// 扩展名（.lock/.yml）已经在 BUILD_EXTENSIONS 里——这三个之外的名字
+// 都是死代码，写在这里反而制造「靠这条规则」的假象。
+const BUILD_EXACT_NAMES = new Set(['requirements.txt', 'go.mod', 'go.sum'])
 
 const DOC_EXTENSIONS = new Set(['.md', '.mdx', '.txt', '.rst', '.adoc'])
 const DOC_ASSET_EXTENSIONS = new Set([
@@ -42,8 +44,15 @@ const BUILD_EXTENSIONS = new Set(['.json', '.yaml', '.yml', '.toml', '.ini', '.c
 /**
  * 给一个路径判角色：source / build / doc。判定顺序本身是规则的一部分——
  * `requirements.txt` 必须在「精确文件名→build」这一步就被接住，否则会被
- * 后面「.txt→doc」的扩展名规则先命中，变成一篇文档；`.github/` 下的 `.yml`
- * 同理必须先按路径归为 build——不是靠扩展名巧合对上，是因为它就是 CI 配置。
+ * 后面「.txt→doc」的扩展名规则先命中，变成一篇文档。
+ *
+ * 判据只看文件名/扩展名，**不看目录**——`.github/` 曾经整目录判成 build，
+ * 但 `.github/scripts/release.ts` 是真代码（`deps.ts` 照样会扫它、给它连边），
+ * 整目录规则会把它连同它的测试一起从代码叙事里抽走、扔进构建章。删掉这条
+ * 特例后交给扩展名规则自己判：`.github/workflows/ci.yml` 走 build（.yml
+ * 本来就在 BUILD_EXTENSIONS 里，整目录规则对它是死代码），
+ * `.github/ISSUE_TEMPLATE/*.md`、`.github/CONTRIBUTING.md` 走 doc（.md），
+ * `.github/scripts/release.ts` 走 source——每一项都更准，还少一个特例。
  *
  * 文档、构建配置、占位文件没有对应的实现，`isPairable`（下面的薄别名）靠
  * 这个函数把它们排除在「谈得上有没有配套测试」之外：给它们规约出
@@ -51,8 +60,6 @@ const BUILD_EXTENSIONS = new Set(['.json', '.yaml', '.yml', '.toml', '.ini', '.c
  * 规约成 `src/contract/.gitkeep`，那个目录根本不存在。
  */
 export function roleOf(path: string): FileRole {
-  if (path === '.github' || path.startsWith('.github/')) return 'build'
-
   const slash = path.lastIndexOf('/')
   const name = slash < 0 ? path : path.slice(slash + 1)
   if (DOC_EXACT_NAMES.has(name)) return 'doc'
@@ -73,8 +80,16 @@ export function roleOf(path: string): FileRole {
 
 /**
  * 这个路径是否「看起来是代码」，也就是谈得上有没有配套测试。
- * 薄别名：真正的判断在 `roleOf` 里，这里只是把 `isPairable` 的老调用点
- * 接到新的角色判断上，行为保持不变。
+ * 薄别名：真正的判断在 `roleOf` 里。
+ *
+ * 这不是行为不变的重构——旧版 `NOT_PAIRABLE_EXT` 拒绝清单本来就没列全，
+ * 这次顺带把它列全了，answers 因此对一部分路径有意变了：
+ * - `go.mod`/`go.sum`（扩展名 `.mod`/`.sum` 从未在旧清单里）、
+ *   `.properties`（Java/Spring 配置）：旧版当成实现文件，新版归 build——
+ *   它们本来就不是代码，旧清单只是漏收。
+ * - `.webp`/`.woff`/`.woff2`/`.ttf`（图片、字体）：旧版当成实现文件，
+ *   新版归 doc——同样是旧清单漏收，不是本次改了判断标准。
+ * 除了这几类，`roleOf` 对旧版已经覆盖到的路径给出相同答案。
  */
 export function isPairable(path: string): boolean {
   return roleOf(path) === 'source'

@@ -3,42 +3,43 @@ import { DEFAULT_PAIR_RULES, canonicalCandidates, canonicalPath, isPairable, rol
 import type { FileRole } from '../../src/narrate/pair.js'
 
 // 覆盖 roleOf 分类规则里编号的每一条，顺序对应 spec 里的判定顺序。
+// 不再有「.github/ 整目录」规则——那条规则会把 .github/ 下的真代码
+// （比如 release 脚本）连同它的测试一起从代码叙事里抽走，已删除，
+// 交给下面的扩展名规则自己判（见 pair.ts 的 roleOf 注释）。
 const ROLE_CASES: Array<[string, FileRole]> = [
-  // 1. .github/ 路径 → build（即便扩展名是 .yml，本该像数据一样看待）
-  ['.github/workflows/ci.yml', 'build'],
-  ['.github/ISSUE_TEMPLATE/bug.md', 'build'],
-  // 2. 精确文件名 → doc
+  // 1. 精确文件名 → doc
   ['LICENSE', 'doc'],
   ['NOTICE', 'doc'],
   ['COPYING', 'doc'],
   ['CHANGELOG', 'doc'],
   ['AUTHORS', 'doc'],
-  // 3. 精确文件名 → build（requirements.txt 必须在「.txt → doc」之前判定）
+  // 2. 精确文件名 → build。只有这三个「少了这条规则会被扩展名判错」：
+  // requirements.txt 会被后面「.txt → doc」先接住；go.mod/go.sum 的扩展名
+  // （.mod/.sum）不在任何清单里，落到「其余 → source」。
+  ['requirements.txt', 'build'],
+  ['go.mod', 'build'],
+  ['go.sum', 'build'],
+  // 3. 无真实扩展名 → build。Dockerfile/Makefile/Justfile/Procfile/Gemfile
+  // 走的都是这条（没有精确文件名规则，也用不着——dot<=0 已经接住了它们）。
   ['Dockerfile', 'build'],
   ['Makefile', 'build'],
   ['Justfile', 'build'],
   ['Procfile', 'build'],
-  ['go.mod', 'build'],
-  ['go.sum', 'build'],
   ['Gemfile', 'build'],
-  ['Gemfile.lock', 'build'],
-  ['requirements.txt', 'build'],
-  ['.gitlab-ci.yml', 'build'],
-  // 4. 无真实扩展名 → build（Makefile 形与纯点文件两种形态）
   ['.gitignore', 'build'],
   ['.nvmrc', 'build'],
   ['a/.gitkeep', 'build'],
-  // 5. 文件名含 .config. → build（大小写敏感，是已知且刻意搁置的缺口）
+  // 4. 文件名含 .config. → build（大小写敏感，是已知且刻意搁置的缺口）
   ['a/vitest.config.ts', 'build'],
   ['a/b.CONFIG.ts', 'source'],
-  // 6. 文档扩展名 → doc
+  // 5. 文档扩展名 → doc
   ['README.md', 'doc'],
   ['docs/getting-started.md', 'doc'],
   ['a/b.mdx', 'doc'],
   ['a/b.txt', 'doc'],
   ['a/b.rst', 'doc'],
   ['a/b.adoc', 'doc'],
-  // 7. 文档资产扩展名 → doc
+  // 6. 文档资产扩展名 → doc
   ['a/logo.png', 'doc'],
   ['a/logo.svg', 'doc'],
   ['a/logo.webp', 'doc'],
@@ -46,18 +47,27 @@ const ROLE_CASES: Array<[string, FileRole]> = [
   ['a/font.woff2', 'doc'],
   ['a/font.ttf', 'doc'],
   ['a/manual.pdf', 'doc'],
-  // 8. 构建/配置数据扩展名 → build
+  // 7. 构建/配置数据扩展名 → build。Gemfile.lock（.lock）与 .gitlab-ci.yml
+  // （.yml）也走这条，不需要精确文件名规则。
   ['package.json', 'build'],
   ['pnpm-lock.yaml', 'build'],
   ['a/tsconfig.test.json', 'build'],
   ['a/config.toml', 'build'],
   ['a/settings.ini', 'build'],
   ['a/app.properties', 'build'],
-  // 9. 其余 → source
+  ['Gemfile.lock', 'build'],
+  ['.gitlab-ci.yml', 'build'],
+  // 8. 其余 → source
   ['a/b.ts', 'source'],
   ['a/b.test.ts', 'source'],
   ['run.sh', 'source'],
   ['a/b.min.js', 'source'],
+  // .github/ 不再整目录判 build：里面的文件各按自己的扩展名走上面的规则。
+  ['.github/workflows/ci.yml', 'build'],
+  ['.github/ISSUE_TEMPLATE/bug.md', 'doc'],
+  ['.github/CONTRIBUTING.md', 'doc'],
+  ['.github/scripts/release.ts', 'source'],
+  ['.github/scripts/label.py', 'source'],
 ]
 
 describe('roleOf', () => {
