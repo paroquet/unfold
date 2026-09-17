@@ -97,6 +97,19 @@ describe('buildDepGraph', () => {
     ])
   })
 
+  it('import 目标是非源码文件（.json 等）不连边——spec §4.5：非源码不参与依赖图', () => {
+    // 不这样做的话，`src/z.ts` 依赖 `fixtures/data.json` 会强迫 topoOrder
+    // 把 data.json 排到 z.ts 前面：build/doc 又被一条依赖边拖回代码中间，
+    // 重新切散成按角色断章要消灭的那种碎片（见 segment.test.ts 的端到端用例）。
+    const files = ['src/z.ts', 'fixtures/data.json']
+    const contents = new Map([
+      ['src/z.ts', "import data from '../fixtures/data.json'\n"],
+      ['fixtures/data.json', '{}'],
+    ])
+    const graph = buildDepGraph(files, contents)
+    expect(graph.edges.get('src/z.ts')?.size ?? 0).toBe(0)
+  })
+
   it('不产生自环', () => {
     const files = ['src/a.ts']
     const contents = new Map([['src/a.ts', "import { x } from './a.js'\n"]])

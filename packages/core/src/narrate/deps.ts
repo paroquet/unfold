@@ -1,3 +1,5 @@
+import { roleOf } from './pair.js'
+
 /**
  * 依赖扫描器的版本号。它进 `rulesFingerprint`——换了扫描规则就是换了排序依据，
  * 必须算作「规则变了」，否则上一轮的章节顺序会被当成仍然有效。
@@ -192,8 +194,14 @@ export function buildDepGraph(
     for (const spec of scanImports(content, lang)) {
       const target =
         lang === 'ts' ? resolveTs(file, spec, present) : resolveKotlin(spec, present)
-      // 自环无意义（同一文件内的 re-export），且会让 Tarjan 把单个文件报成环
-      if (target !== null && target !== file) edges.get(file)?.add(target)
+      if (target === null || target === file) continue // 自环无意义，且会让 Tarjan 把单个文件报成环
+      // spec §4.5：非源码文件不参与依赖图，一律不接边。否则一条指向
+      // build/doc 文件的 import（比如 `import data from './fixtures/data.json'`）
+      // 会把它硬排到依赖它的源码文件前面——build/doc 又被依赖边拖回代码
+      // 中间，重新切散成本次改造要消灭的那种碎片（topoOrder 的桶号只在
+      // 「同时可选」时起作用，敌不过一条真实的依赖边）。
+      if (roleOf(target) !== 'source') continue
+      edges.get(file)?.add(target)
     }
   }
 

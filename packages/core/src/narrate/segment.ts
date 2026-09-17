@@ -85,7 +85,8 @@ export function segment(input: SegmentInput): Segment[] {
         ? `其中 ${inCycle.map(baseOf).join('、')} 互相依赖，先后不代表调用方向。`
         : ''
 
-    // source 是依赖序，「先讲到后」有因果意味；build/doc 之间没有依赖边，
+    // source 是依赖序，「先讲到后」有因果意味；build/doc 之间没有依赖边
+    // （deps.ts 的 buildDepGraph 不接指向非源码文件的边，spec §4.5），
     // 排列纯粹是路径字典序，说成「依赖顺序」是假的，要说实话。
     const intro = role === 'source'
       ? `按依赖顺序，这一章从 ${baseOf(head)} 讲到 ${baseOf(tail)}。${cycleNote}`

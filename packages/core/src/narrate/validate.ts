@@ -195,14 +195,22 @@ export function validatePlan(plan: Plan, ctx: PlanContext): ValidationIssue[] {
 
     // maxFiles 管的是「一章代码要能一口气读完」。构建配置与文档不按它切段
     // （见 segment.ts），再拿它去警告就是在报告我们自己的设计决定，而不是
-    // 报告问题——这种必然触发的警告只会淹掉真信号。章内角色恒定（角色变了
-    // segment.ts 必断），取首个文件的角色即代表整章。
-    if (roleOf(files[0] as string) === 'source' && files.length > ctx.rules.maxFiles) {
+    // 报告问题——这种必然触发的警告只会淹掉真信号。
+    //
+    // 不能靠 files[0] 的角色代表整章：filesOf 返回的是排过序的数组，
+    // files[0] 只是字典序最小的路径，不是「这一章的第一个成员」。
+    // 「章内角色恒定」这个前提只对 segment() 刚产出的 plan 成立——批注钉定
+    // 是归属阶梯的第一级，能把任意 hunk 钉进任意章，混入一条 doc/build 的
+    // hunk 之后角色就不再统一，字典序又偏偏容易把 CHANGELOG.md 这类名字
+    // 排到 src/ 前面，靠 files[0] 判角色会被骗过去，把该报的源码超额悄悄
+    // 吞掉。所以直接数源码文件，不判整章是什么角色。
+    const sourceCount = files.filter((p) => roleOf(p) === 'source').length
+    if (sourceCount > ctx.rules.maxFiles) {
       issues.push({
         code: 'chapter-oversized',
         severity: 'warn',
         message:
-          `第 ${ch.index} 章「${ch.title}」有 ${files.length} 个文件，` +
+          `第 ${ch.index} 章「${ch.title}」有 ${sourceCount} 个文件，` +
           `超过 maxFiles=${ctx.rules.maxFiles}`,
       })
     }

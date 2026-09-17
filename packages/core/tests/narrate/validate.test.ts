@@ -322,6 +322,38 @@ describe('章节体检', () => {
     expect(issues.find((i) => i.code === 'chapter-oversized')).toBeUndefined()
   })
 
+  it('非源码章（构建配置）超过 maxFiles 同样不报 chapter-oversized', () => {
+    const paths = Array.from({ length: 20 }, (_, i) => `conf/f${i}.json`)
+    const issues = validatePlan(
+      { ...base, chapters: [chapter({ filePaths: paths })] },
+      ctx({
+        changes: paths.map(mkChange),
+        canonical: new Map(paths.map((p) => [p, p])),
+        rules: { ...DEFAULT_RULES, maxFiles: 2 },
+      }),
+    )
+    expect(issues.find((i) => i.code === 'chapter-oversized')).toBeUndefined()
+  })
+
+  it('章内混入一条 doc hunk（CHANGELOG.md）时，源码文件数依旧超额要报——不能被 files[0] 的字典序骗过', () => {
+    // filesOf 把成员排过序，'CHANGELOG.md' 字典序在 'src/...' 之前，
+    // 会排到 files[0]。如果拿 files[0] 的角色代表整章，这一章就会被
+    // 误判成「文档章」而放过检查——但它明明有 5 个源码文件，超过 maxFiles=2。
+    const sources = ['a', 'b', 'c', 'd', 'e'].map((n) => `src/${n}.ts`)
+    const paths = [...sources, 'CHANGELOG.md']
+    const issues = validatePlan(
+      { ...base, chapters: [chapter({ filePaths: paths })] },
+      ctx({
+        changes: paths.map(mkChange),
+        canonical: new Map(paths.map((p) => [p, p])),
+        rules: { ...DEFAULT_RULES, maxFiles: 2 },
+      }),
+    )
+    const issue = issues.find((i) => i.code === 'chapter-oversized')
+    expect(issue).toBeDefined()
+    expect(issue?.message).toContain('5 个文件')
+  })
+
   it('第 N 章依赖第 M 章且 M > N 时报 chapter-backward-dep', () => {
     const issues = validatePlan(
       {

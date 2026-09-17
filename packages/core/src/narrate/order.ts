@@ -136,7 +136,17 @@ export function topoOrder(
   }
   // 强连通分量可能横跨角色（前提是它们之间真的有依赖边）。这种时候取
   // 分量里最低的层号——代码不该被一个混进来的构建文件拖到最后。
-  const bucketOf = (component: string[]): number => Math.min(...component.map(tierOf))
+  // 用循环取最小值而不是 `Math.min(...arr)`：展开传参会把数组元素铺进
+  // 调用栈，超大强连通分量会爆栈——`stronglyConnected` 当初特意改成迭代版
+  // Tarjan 就是为了避免这类问题，这里不能用一行展开语法把它绕回去。
+  const bucketOf = (component: string[]): number => {
+    let best = Infinity
+    for (const member of component) {
+      const tier = tierOf(member)
+      if (tier < best) best = tier
+    }
+    return best
+  }
   const bucket = components.map(bucketOf)
   const head = components.map((component) => component[0] as string)
 

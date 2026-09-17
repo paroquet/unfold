@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { segment } from '../../src/narrate/segment.js'
+import { buildDepGraph } from '../../src/narrate/deps.js'
+import { topoOrder } from '../../src/narrate/order.js'
 
 const one = (): number => 1
 
@@ -85,5 +87,28 @@ describe('segment', () => {
     expect(chapter?.title).toBe('文档：README.md → getting-started.md')
     expect(chapter?.intro).toContain('路径')
     expect(chapter?.intro).not.toContain('依赖顺序')
+  })
+
+  it('端到端：源码 import 改动中的 .json 时，构建文件仍聚成一章且排在代码之后（spec §4.5）', () => {
+    // src/z.ts 依赖 fixtures/data.json；若 buildDepGraph 给这条 import 连边，
+    // topoOrder 会被迫把 data.json 排到 z.ts 前面，segment 就会切出
+    // src:a→b / 构建与配置:data.json / src:z / 构建与配置:tsconfig.json / 文档:README.md
+    // 这种代码中间插了一章构建配置、构建配置本身又被拆成两处的形状——
+    // 正是这次改造要消灭的碎片。
+    const files = ['src/a.ts', 'src/b.ts', 'src/z.ts', 'fixtures/data.json', 'tsconfig.json', 'README.md']
+    const contents = new Map([
+      ['src/a.ts', 'export const a = 1\n'],
+      ['src/b.ts', "import { a } from './a.js'\n"],
+      ['src/z.ts', "import data from '../fixtures/data.json'\n"],
+    ])
+    const graph = buildDepGraph(files, contents)
+    const { order, cycles } = topoOrder(files, graph.edges)
+    const chapters = segment({ order, cycles, maxFiles: 8, fileCount: one })
+
+    expect(chapters).toHaveLength(3)
+    expect(chapters[0]?.members).toEqual(['src/a.ts', 'src/b.ts', 'src/z.ts'])
+    expect(chapters[1]?.members).toEqual(['fixtures/data.json', 'tsconfig.json'])
+    expect(chapters[1]?.title).toMatch(/^构建与配置/)
+    expect(chapters[2]?.members).toEqual(['README.md'])
   })
 })
